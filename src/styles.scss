@@ -125,12 +125,13 @@
     }
   }
 
-  // Win/Linux Electron with custom title bar: WCO renders a ~44px overlay
-  // band at top-right. Push the strip down by header height so its first
-  // button doesn't sit under the WCO buttons.
+  // Win/Linux Electron with custom title bar: WCO renders a compact band
+  // (--wco-height, matches electron WCO_HEIGHT) at top-right. Push the
+  // strip down by exactly that height so its first button sits flush
+  // below the WCO buttons and the strip reclaims the newly-freed space.
   body.isElectron.isNoMac.isObsidianStyleHeader
     > nav.action-nav-right.action-nav-right--teleported {
-    top: var(--bar-height);
+    top: var(--wco-height);
   }
 
   [dir='rtl'] > nav.action-nav-right.action-nav-right--teleported {

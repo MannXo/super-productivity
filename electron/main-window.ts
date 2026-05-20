@@ -31,10 +31,11 @@ import { markGpuStartupSuccess } from './gpu-startup-guard';
 let mainWin: BrowserWindow;
 
 // Compact WCO band on Win/Linux. Native button width is OS-controlled
-// (~138px total); only height is configurable. 32px is the same range
-// VS Code / Edge use for slim title bars and stays well clear of the
-// vertical action strip which positions itself --bar-height (48px) down.
-const WCO_HEIGHT = 32;
+// (~138px total); only height is configurable. Lower values may be
+// clamped to the OS minimum (~24–28px on Win11) — Electron silently
+// floors instead of rejecting. Stays well clear of the vertical action
+// strip which positions itself --bar-height (48px) down.
+const WCO_HEIGHT = 24;
 
 /**
  * Returns theme-aware background color for titlebar overlay.
