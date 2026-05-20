@@ -785,10 +785,30 @@ describe('OperationLogEffects', () => {
 
       await effects.processDeferredActions({ callerHoldsOperationLogLock: true });
 
-      // The action was NEVER persisted.
-      // (appendWithVectorClockUpdate was attempted but each call rejected.)
-      // The differentiating assertion: DEFERRED_ACTION_FAILED fires ONLY
-      // when the retry loop sees writeOperation throw. Pre-fix it didn't.
+      // 1. The bail path actually ran (proves handleQuotaExceeded was invoked
+      //    AND took the caller-holds-lock branch — not some other code path).
+      expect(mockSnackService.open).toHaveBeenCalledWith(
+        jasmine.objectContaining({
+          type: 'ERROR',
+          msg: T.F.SYNC.S.STORAGE_QUOTA_EXCEEDED,
+        }),
+      );
+      // 2. Dedupe: even though the retry loop calls handleQuotaExceeded 3
+      //    times, STORAGE_QUOTA_EXCEEDED snack must fire ONLY ONCE.
+      //    Without the dedupe (lastStorageQuotaSnackAt window) the user
+      //    would see 3 identical sticky snacks per quota event.
+      const storageQuotaSnackCalls = mockSnackService.open.calls
+        .allArgs()
+        .filter(
+          ([arg]) => (arg as { msg?: string })?.msg === T.F.SYNC.S.STORAGE_QUOTA_EXCEEDED,
+        );
+      expect(storageQuotaSnackCalls.length).toBe(1);
+      // 3. The retry loop saw the throw and actually retried — appendWith*
+      //    was attempted MAX_RETRIES=3 times, not once. Pre-fix the loop
+      //    would have broken on attempt #1 with success=true.
+      expect(mockOpLogStore.appendWithVectorClockUpdate).toHaveBeenCalledTimes(3);
+      // 4. DEFERRED_ACTION_FAILED fires ONLY when the retry loop's
+      //    failedCount > 0 after all retries — the loud-fail outcome.
       expect(mockSnackService.open).toHaveBeenCalledWith(
         jasmine.objectContaining({
           type: 'ERROR',

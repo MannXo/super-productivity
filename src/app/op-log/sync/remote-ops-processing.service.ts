@@ -391,63 +391,75 @@ export class RemoteOpsProcessingService {
   ): Promise<void> {
     await this._logFullStateApplyDiagnostics(ops);
 
-    // Core owns the generic crash-safety ordering. Angular diagnostics,
-    // validation, and user notifications stay in this service.
-    const result = await applyRemoteOperations({
-      ops,
-      store: this.opLogStore,
-      applier: {
-        applyOperations: (opsToApply) =>
-          this.operationApplier.applyOperations(opsToApply, {
-            skipDeferredLocalActions: true,
-          }),
-      },
-      isFullStateOperation: this._isFullStateOperation,
-    });
-
-    if (result.appendedOps.length > 0) {
-      await processDeferredActionsAfterRemoteApply(this.injector, callerHoldsLock);
-    }
-
-    if (result.skippedCount > 0) {
-      OpLog.verbose(
-        `RemoteOpsProcessingService: Skipping ${result.skippedCount} duplicate op(s)`,
-      );
-    }
-
-    if (result.clearedFullStateOpCount > 0) {
-      OpLog.normal(
-        `RemoteOpsProcessingService: Cleared ${result.clearedFullStateOpCount} old full-state op(s) after applying new one.`,
-      );
-    }
-
-    if (result.appliedSeqs.length > 0) {
-      OpLog.normal(
-        `RemoteOpsProcessingService: Applied and marked ${result.appliedSeqs.length} remote ops`,
-      );
-    }
-
-    // Handle partial failure
-    if (result.failedOp) {
-      OpLog.err(
-        `RemoteOpsProcessingService: ${result.appliedOps.length} ops applied before failure. ` +
-          `Marking ${result.failedOpIds.length} ops as failed.`,
-        result.failedOp.error,
-      );
-
-      await this._validateAndFlagSession(
-        'partial-apply-failure',
-        callerHoldsLock,
-        'RemoteOpsProcessingService: State validation failed after partial apply failure',
-      );
-
-      this.snackService.open({
-        type: 'ERROR',
-        msg: T.F.SYNC.S.PARTIAL_APPLY_FAILURE,
+    // Mirror autoResolveConflictsLWW: wrap apply in try/finally so deferred
+    // local actions are flushed whether the apply succeeded or threw.
+    // Without this, an apply-time throw (e.g. dispatcher error inside the
+    // wrapped operationApplier.applyOperations) would leave buffered actions
+    // to leak into the next sync window with stale clocks. (#7700)
+    let didApplyRemoteOps = false;
+    try {
+      // Core owns the generic crash-safety ordering. Angular diagnostics,
+      // validation, and user notifications stay in this service.
+      const result = await applyRemoteOperations({
+        ops,
+        store: this.opLogStore,
+        applier: {
+          applyOperations: (opsToApply) =>
+            this.operationApplier.applyOperations(opsToApply, {
+              skipDeferredLocalActions: true,
+            }),
+        },
+        isFullStateOperation: this._isFullStateOperation,
       });
 
-      // Re-throw if it's a SyncStateCorruptedError, otherwise wrap it
-      throw result.failedOp.error;
+      didApplyRemoteOps = result.appendedOps.length > 0;
+
+      if (result.skippedCount > 0) {
+        OpLog.verbose(
+          `RemoteOpsProcessingService: Skipping ${result.skippedCount} duplicate op(s)`,
+        );
+      }
+
+      if (result.clearedFullStateOpCount > 0) {
+        OpLog.normal(
+          `RemoteOpsProcessingService: Cleared ${result.clearedFullStateOpCount} old full-state op(s) after applying new one.`,
+        );
+      }
+
+      if (result.appliedSeqs.length > 0) {
+        OpLog.normal(
+          `RemoteOpsProcessingService: Applied and marked ${result.appliedSeqs.length} remote ops`,
+        );
+      }
+
+      // Handle partial failure
+      if (result.failedOp) {
+        OpLog.err(
+          `RemoteOpsProcessingService: ${result.appliedOps.length} ops applied before failure. ` +
+            `Marking ${result.failedOpIds.length} ops as failed.`,
+          result.failedOp.error,
+        );
+
+        await this._validateAndFlagSession(
+          'partial-apply-failure',
+          callerHoldsLock,
+          'RemoteOpsProcessingService: State validation failed after partial apply failure',
+        );
+
+        this.snackService.open({
+          type: 'ERROR',
+          msg: T.F.SYNC.S.PARTIAL_APPLY_FAILURE,
+        });
+
+        // Re-throw if it's a SyncStateCorruptedError, otherwise wrap it.
+        // The deferred-actions flush in the finally below runs before the
+        // throw propagates.
+        throw result.failedOp.error;
+      }
+    } finally {
+      if (didApplyRemoteOps) {
+        await processDeferredActionsAfterRemoteApply(this.injector, callerHoldsLock);
+      }
     }
   }
 
