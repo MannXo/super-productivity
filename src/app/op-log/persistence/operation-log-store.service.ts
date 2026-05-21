@@ -160,6 +160,8 @@ interface OpLogDB extends DBSchema {
   };
 }
 
+type OpLogStoreName = (typeof STORE_NAMES)[keyof typeof STORE_NAMES];
+
 /**
  * Manages the persistence of operations and state snapshots in IndexedDB.
  * It uses a dedicated IndexedDB database ('SUP_OPS') to store:
@@ -1579,15 +1581,25 @@ export class OperationLogStoreService implements RemoteOperationApplyStorePort<O
     newState: unknown;
     schemaVersion: number;
     snapshotEntityKeys: string[];
+    archiveYoung?: ArchiveStoreEntry['data'];
+    archiveOld?: ArchiveStoreEntry['data'];
   }): Promise<void> {
     await this._ensureInit();
 
     const compactedAt = Date.now();
     const compactOp = encodeOperation(opts.syncImportOp);
-    const tx = this.db.transaction(
-      [STORE_NAMES.OPS, STORE_NAMES.STATE_CACHE, STORE_NAMES.VECTOR_CLOCK],
-      'readwrite',
-    );
+    const storeNames: OpLogStoreName[] = [
+      STORE_NAMES.OPS,
+      STORE_NAMES.STATE_CACHE,
+      STORE_NAMES.VECTOR_CLOCK,
+    ];
+    if (opts.archiveYoung !== undefined) {
+      storeNames.push(STORE_NAMES.ARCHIVE_YOUNG);
+    }
+    if (opts.archiveOld !== undefined) {
+      storeNames.push(STORE_NAMES.ARCHIVE_OLD);
+    }
+    const tx = this.db.transaction(storeNames, 'readwrite');
 
     try {
       const opsStore = tx.objectStore(STORE_NAMES.OPS);
@@ -1619,6 +1631,22 @@ export class OperationLogStoreService implements RemoteOperationApplyStorePort<O
         schemaVersion: opts.schemaVersion,
         snapshotEntityKeys: opts.snapshotEntityKeys,
       });
+
+      if (opts.archiveYoung !== undefined) {
+        await tx.objectStore(STORE_NAMES.ARCHIVE_YOUNG).put({
+          id: SINGLETON_KEY,
+          data: opts.archiveYoung,
+          lastModified: compactedAt,
+        });
+      }
+
+      if (opts.archiveOld !== undefined) {
+        await tx.objectStore(STORE_NAMES.ARCHIVE_OLD).put({
+          id: SINGLETON_KEY,
+          data: opts.archiveOld,
+          lastModified: compactedAt,
+        });
+      }
 
       await tx.done;
 

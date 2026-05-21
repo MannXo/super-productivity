@@ -2,6 +2,7 @@ import { TestBed } from '@angular/core/testing';
 import { ClientIdService } from './client-id.service';
 import { SnackService } from '../snack/snack.service';
 import { openDB } from 'idb';
+import { OpLog } from '../log';
 
 // Constants that mirror the private constants in ClientIdService
 const DB_NAME = 'pf';
@@ -192,6 +193,35 @@ describe('ClientIdService', () => {
       expect(await service.loadClientId()).toBe('B_Prio');
     });
 
+    it('should restore the persisted prior clientId even when the cache is stale', async () => {
+      await service.persistClientId('B_Cach');
+      await writeRawClientId('B_Fres');
+
+      await expectAsync(
+        service.withRotation('[Test]', async () => {
+          throw new Error('work failed');
+        }),
+      ).toBeRejectedWith(jasmine.objectContaining({ message: 'work failed' }));
+
+      service.clearCache();
+      expect(await service.loadClientId()).toBe('B_Fres');
+    });
+
+    it('should not roll back over a newer persisted clientId from another context', async () => {
+      await service.persistClientId('B_Prio');
+      service.clearCache();
+
+      await expectAsync(
+        service.withRotation('[Test]', async () => {
+          await writeRawClientId('B_Othr');
+          throw new Error('work failed');
+        }),
+      ).toBeRejectedWith(jasmine.objectContaining({ message: 'work failed' }));
+
+      service.clearCache();
+      expect(await service.loadClientId()).toBe('B_Othr');
+    });
+
     it('should leave the rotated clientId in place when there was no prior id', async () => {
       // Wholly fresh device — `pf` is empty.
       expect(await service.loadClientId()).toBeNull();
@@ -210,13 +240,46 @@ describe('ClientIdService', () => {
     it('should propagate the original fn error when rollback also fails', async () => {
       await service.persistClientId('B_Prio');
       service.clearCache();
-      spyOn(service, 'persistClientId').and.rejectWith(new Error('pf write also broken'));
+      spyOn(service as any, '_restorePriorClientIdIfCurrentMatches').and.rejectWith(
+        new Error('pf write also broken'),
+      );
 
       await expectAsync(
         service.withRotation('[Test]', async () => {
           throw new Error('work failed');
         }),
       ).toBeRejectedWith(jasmine.objectContaining({ message: 'work failed' }));
+    });
+
+    it('should not log clientIds or raw error messages when rollback fails', async () => {
+      await service.persistClientId('B_Prio');
+      service.clearCache();
+      spyOn(service as any, '_restorePriorClientIdIfCurrentMatches').and.rejectWith(
+        new Error('rollback failed with B_Prio'),
+      );
+      const opLogSpy = spyOn(OpLog, 'critical');
+
+      await expectAsync(
+        service.withRotation('[Test]', async () => {
+          throw new Error('work failed with B_Prio');
+        }),
+      ).toBeRejectedWith(
+        jasmine.objectContaining({ message: 'work failed with B_Prio' }),
+      );
+
+      expect(opLogSpy).toHaveBeenCalled();
+      const payload = opLogSpy.calls.mostRecent().args[1] as Record<string, unknown>;
+      const serializedPayload = JSON.stringify(payload);
+      expect(payload).toEqual(
+        jasmine.objectContaining({
+          hadPriorClientId: true,
+          originalErrorName: 'Error',
+          rollbackErrorName: 'Error',
+        }),
+      );
+      expect(serializedPayload).not.toContain('B_Prio');
+      expect(serializedPayload).not.toContain('work failed');
+      expect(serializedPayload).not.toContain('rollback failed');
     });
   });
 });

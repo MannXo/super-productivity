@@ -71,7 +71,10 @@ describe('OperationLogEffects', () => {
     mockImmediateUploadService = jasmine.createSpyObj('ImmediateUploadService', [
       'trigger',
     ]);
-    mockClientIdService = jasmine.createSpyObj('ClientIdService', ['loadClientId']);
+    mockClientIdService = jasmine.createSpyObj('ClientIdService', [
+      'loadClientId',
+      'generateNewClientId',
+    ]);
     mockOperationCaptureService = jasmine.createSpyObj('OperationCaptureService', [
       'dequeue',
     ]);
@@ -92,6 +95,9 @@ describe('OperationLogEffects', () => {
     mockCompactionService.emergencyCompact.and.returnValue(Promise.resolve(true));
     mockStore.select.and.returnValue(of({})); // Return empty state observable
     mockClientIdService.loadClientId.and.returnValue(Promise.resolve('testClient'));
+    mockClientIdService.generateNewClientId.and.returnValue(
+      Promise.resolve('generatedClient'),
+    );
     mockOperationCaptureService.dequeue.and.returnValue([]);
 
     TestBed.configureTestingModule({
@@ -181,6 +187,34 @@ describe('OperationLogEffects', () => {
             'sp_op_log',
             jasmine.any(Function),
           );
+          done();
+        },
+      });
+    });
+
+    it('should load clientId only after acquiring operation log lock', (done) => {
+      const callOrder: string[] = [];
+      mockLockService.request.and.callFake(
+        async (_name: string, fn: () => Promise<void>) => {
+          callOrder.push('lock');
+          await fn();
+        },
+      );
+      mockClientIdService.loadClientId.and.callFake(async () => {
+        callOrder.push('clientId');
+        return 'testClient';
+      });
+      mockOpLogStore.appendWithVectorClockUpdate.and.callFake(async () => {
+        callOrder.push('append');
+        return 1;
+      });
+
+      const action = createPersistentAction(ActionType.TASK_SHARED_UPDATE);
+      actions$ = of(action);
+
+      effects.persistOperation$.subscribe({
+        complete: () => {
+          expect(callOrder).toEqual(['lock', 'clientId', 'append']);
           done();
         },
       });

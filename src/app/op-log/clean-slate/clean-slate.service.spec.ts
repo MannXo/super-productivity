@@ -7,12 +7,17 @@ import { OpType, OperationLogEntry } from '../core/operation.types';
 import { ActionType } from '../core/action-types.enum';
 import { CURRENT_SCHEMA_VERSION } from '../persistence/schema-migration.service';
 import { OpLog } from '../../core/log';
+import { OperationWriteFlushService } from '../sync/operation-write-flush.service';
+import { LockService } from '../sync/lock.service';
+import { LOCK_NAMES } from '../core/operation-log.const';
 
 describe('CleanSlateService', () => {
   let service: CleanSlateService;
   let mockStateSnapshotService: jasmine.SpyObj<StateSnapshotService>;
   let mockOpLogStore: jasmine.SpyObj<OperationLogStoreService>;
   let mockClientIdService: jasmine.SpyObj<ClientIdService>;
+  let mockOperationWriteFlushService: jasmine.SpyObj<OperationWriteFlushService>;
+  let mockLockService: jasmine.SpyObj<LockService>;
 
   const mockState = {
     task: { ids: [], entities: {} },
@@ -31,6 +36,10 @@ describe('CleanSlateService', () => {
       'getUnsynced',
     ]);
     mockClientIdService = jasmine.createSpyObj('ClientIdService', ['withRotation']);
+    mockOperationWriteFlushService = jasmine.createSpyObj('OperationWriteFlushService', [
+      'flushPendingWrites',
+    ]);
+    mockLockService = jasmine.createSpyObj('LockService', ['request']);
 
     TestBed.configureTestingModule({
       providers: [
@@ -38,6 +47,11 @@ describe('CleanSlateService', () => {
         { provide: StateSnapshotService, useValue: mockStateSnapshotService },
         { provide: OperationLogStoreService, useValue: mockOpLogStore },
         { provide: ClientIdService, useValue: mockClientIdService },
+        {
+          provide: OperationWriteFlushService,
+          useValue: mockOperationWriteFlushService,
+        },
+        { provide: LockService, useValue: mockLockService },
       ],
     });
 
@@ -55,6 +69,8 @@ describe('CleanSlateService', () => {
     mockOpLogStore.runDestructiveStateReplacement.and.resolveTo();
     mockOpLogStore.getVectorClock.and.resolveTo(null);
     mockOpLogStore.getUnsynced.and.resolveTo([]);
+    mockOperationWriteFlushService.flushPendingWrites.and.resolveTo();
+    mockLockService.request.and.callFake(async (_lockName, fn) => fn());
   });
 
   describe('createCleanSlate', () => {
@@ -87,6 +103,35 @@ describe('CleanSlateService', () => {
       expect(args.newVectorClock).toEqual({ eNewC: 1 });
       expect(args.newState).toBe(mockState);
       expect(args.schemaVersion).toBe(CURRENT_SCHEMA_VERSION);
+    });
+
+    it('should flush pending writes and hold the op-log lock during replacement', async () => {
+      const callOrder: string[] = [];
+      mockOperationWriteFlushService.flushPendingWrites.and.callFake(async () => {
+        callOrder.push('flush');
+      });
+      mockLockService.request.and.callFake(async (lockName, fn) => {
+        callOrder.push(`lock:${lockName}`);
+        await fn();
+        callOrder.push('unlock');
+      });
+      mockStateSnapshotService.getStateSnapshotAsync.and.callFake(async () => {
+        callOrder.push('snapshot');
+        return mockState as any;
+      });
+      mockOpLogStore.runDestructiveStateReplacement.and.callFake(async () => {
+        callOrder.push('replace');
+      });
+
+      await service.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED');
+
+      expect(callOrder).toEqual([
+        'flush',
+        `lock:${LOCK_NAMES.OPERATION_LOG}`,
+        'snapshot',
+        'replace',
+        'unlock',
+      ]);
     });
 
     it('should log diagnostic snapshot of prior clock and unsynced ops before mutation', async () => {

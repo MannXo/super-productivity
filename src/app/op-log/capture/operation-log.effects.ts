@@ -114,15 +114,6 @@ export class OperationLogEffects implements DeferredLocalActionsPort {
     options: WriteOperationOptions = {},
   ): Promise<void> {
     const operationTimestamp = Date.now();
-    // Always read from ClientIdService (which has its own in-memory cache).
-    // Do NOT cache locally — BackupService.generateNewClientId() updates the
-    // service cache, and a local cache here would go stale after backup import.
-    const clientId =
-      (await this.clientIdService.loadClientId()) ??
-      (await this.clientIdService.generateNewClientId());
-    if (!clientId) {
-      throw new Error('Failed to load or generate clientId - cannot persist operation');
-    }
 
     // Validate that at least one entity identifier exists for non-bulk operations
     // Bulk operations with entityType 'ALL' don't need specific entity IDs
@@ -170,6 +161,19 @@ export class OperationLogEffects implements DeferredLocalActionsPort {
 
     try {
       const writeInsideOperationLogLock = async (): Promise<void> => {
+        // Always read from ClientIdService while holding the write lock.
+        // Clean-slate and backup import rotate the clientId while holding this
+        // same lock; reading here prevents a queued operation from capturing
+        // the old id before waiting behind a destructive replacement.
+        const clientId =
+          (await this.clientIdService.loadClientId()) ??
+          (await this.clientIdService.generateNewClientId());
+        if (!clientId) {
+          throw new Error(
+            'Failed to load or generate clientId - cannot persist operation',
+          );
+        }
+
         // MULTI-TAB SAFETY: Clear vector clock cache to ensure fresh read after other tabs
         // may have written while we were waiting for the lock. Each tab has its own in-memory
         // cache, so Tab B's cache could be stale if Tab A wrote while Tab B was waiting.

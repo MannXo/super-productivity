@@ -22,6 +22,7 @@ import {
   IDB_OPEN_RETRY_BASE_DELAY_MS,
 } from '../core/operation-log.const';
 import { IndexedDBOpenError } from '../core/errors/indexed-db-open.error';
+import { SINGLETON_KEY, STORE_NAMES } from './db-keys.const';
 
 describe('OperationLogStoreService', () => {
   let service: OperationLogStoreService;
@@ -1604,6 +1605,117 @@ describe('OperationLogStoreService', () => {
       expect(entry!.clock).toEqual({ clientA: 5 });
       expect(entry!.lastUpdate).toBeGreaterThanOrEqual(beforeTime);
       expect(entry!.lastUpdate).toBeLessThanOrEqual(afterTime);
+    });
+  });
+
+  describe('runDestructiveStateReplacement', () => {
+    const createArchive = (taskId: string): any => ({
+      task: {
+        ids: [taskId],
+        entities: { [taskId]: { id: taskId, title: taskId } },
+      },
+      timeTracking: { project: {}, tag: {} },
+      lastTimeTrackingFlush: 0,
+    });
+
+    it('should write archives in the same destructive replacement', async () => {
+      const archiveYoung = createArchive('young-task');
+      const archiveOld = createArchive('old-task');
+
+      await service.runDestructiveStateReplacement({
+        syncImportOp: createTestOperation({
+          opType: OpType.BackupImport,
+          entityType: 'ALL' as EntityType,
+          entityId: 'backup-import',
+          payload: { task: { ids: [], entities: {} } },
+        }),
+        newVectorClock: { testClient: 1 },
+        newState: { task: { ids: [], entities: {} } },
+        schemaVersion: 1,
+        snapshotEntityKeys: [],
+        archiveYoung,
+        archiveOld,
+      });
+
+      const db = (service as any).db;
+      const youngEntry = await db.get(STORE_NAMES.ARCHIVE_YOUNG, SINGLETON_KEY);
+      const oldEntry = await db.get(STORE_NAMES.ARCHIVE_OLD, SINGLETON_KEY);
+      expect(youngEntry.data).toEqual(archiveYoung);
+      expect(oldEntry.data).toEqual(archiveOld);
+    });
+
+    it('should roll back ops, state_cache, vector_clock, and archives when an archive write fails', async () => {
+      const priorOp = createTestOperation({ entityId: 'prior-task' });
+      const priorArchiveYoung = createArchive('prior-young');
+      const priorArchiveOld = createArchive('prior-old');
+      await service.append(priorOp);
+      await service.saveStateCache({
+        state: { sentinel: 'prior-state' },
+        lastAppliedOpSeq: 1,
+        vectorClock: { testClient: 1 },
+        compactedAt: Date.now(),
+      });
+      await service.setVectorClock({ testClient: 1 });
+
+      const db = (service as any).db;
+      await db.put(STORE_NAMES.ARCHIVE_YOUNG, {
+        id: SINGLETON_KEY,
+        data: priorArchiveYoung,
+        lastModified: 1,
+      });
+      await db.put(STORE_NAMES.ARCHIVE_OLD, {
+        id: SINGLETON_KEY,
+        data: priorArchiveOld,
+        lastModified: 1,
+      });
+
+      const realTransaction = db.transaction.bind(db);
+      spyOn(db, 'transaction').and.callFake((stores: any, mode: any) => {
+        const tx = realTransaction(stores, mode);
+        if (Array.isArray(stores) && stores.includes(STORE_NAMES.ARCHIVE_YOUNG)) {
+          const realObjectStore = tx.objectStore.bind(tx);
+          tx.objectStore = ((storeName: string) => {
+            const store = realObjectStore(storeName);
+            if (storeName === STORE_NAMES.ARCHIVE_YOUNG) {
+              store.put = async () => {
+                throw new Error('Simulated archive write failure');
+              };
+            }
+            return store;
+          }) as typeof tx.objectStore;
+        }
+        return tx;
+      });
+
+      await expectAsync(
+        service.runDestructiveStateReplacement({
+          syncImportOp: createTestOperation({
+            opType: OpType.BackupImport,
+            entityType: 'ALL' as EntityType,
+            entityId: 'backup-import',
+            payload: { task: { ids: ['new-task'], entities: {} } },
+          }),
+          newVectorClock: { newClient: 1 },
+          newState: { sentinel: 'new-state' },
+          schemaVersion: 1,
+          snapshotEntityKeys: [],
+          archiveYoung: createArchive('new-young'),
+          archiveOld: createArchive('new-old'),
+        }),
+      ).toBeRejected();
+
+      const opsAfter = await service.getOpsAfterSeq(0);
+      expect(opsAfter.map((entry) => entry.op.id)).toEqual([priorOp.id]);
+      expect((await service.loadStateCache())!.state).toEqual({
+        sentinel: 'prior-state',
+      });
+      expect(await service.getVectorClock()).toEqual({ testClient: 1 });
+      expect((await db.get(STORE_NAMES.ARCHIVE_YOUNG, SINGLETON_KEY)).data).toEqual(
+        priorArchiveYoung,
+      );
+      expect((await db.get(STORE_NAMES.ARCHIVE_OLD, SINGLETON_KEY)).data).toEqual(
+        priorArchiveOld,
+      );
     });
   });
 

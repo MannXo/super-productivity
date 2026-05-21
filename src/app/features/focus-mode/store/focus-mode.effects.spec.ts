@@ -2380,13 +2380,15 @@ describe('FocusModeEffects', () => {
 
   describe('detectBreakTimeUp$', () => {
     it('should call notification when break timer completes', (done) => {
+      const breakDuration = 5 * 60 * 1000;
       store.overrideSelector(
         selectors.selectTimer,
         createMockTimer({
           isRunning: false,
           purpose: 'break',
-          duration: 5 * 60 * 1000,
-          elapsed: 5 * 60 * 1000,
+          startedAt: Date.now() - breakDuration,
+          duration: breakDuration,
+          elapsed: breakDuration,
         }),
       );
       store.refreshState();
@@ -2431,6 +2433,7 @@ describe('FocusModeEffects', () => {
         createMockTimer({
           isRunning: false,
           purpose: 'break',
+          startedAt: Date.now() - 1000,
           duration: 0,
           elapsed: 0,
         }),
@@ -2444,6 +2447,28 @@ describe('FocusModeEffects', () => {
         expect(notifyUserSpy).toHaveBeenCalled();
         done();
       });
+    });
+
+    it('should NOT notify for an unstarted duration=0 break offer', (done) => {
+      store.overrideSelector(
+        selectors.selectTimer,
+        createMockTimer({
+          isRunning: false,
+          purpose: 'break',
+          startedAt: null,
+          duration: 0,
+          elapsed: 0,
+        }),
+      );
+      store.refreshState();
+
+      effects = TestBed.inject(FocusModeEffects);
+      const notifyUserSpy = spyOn(effects as any, '_notifyUser');
+
+      setTimeout(() => {
+        expect(notifyUserSpy).not.toHaveBeenCalled();
+        done();
+      }, 50);
     });
   });
 
