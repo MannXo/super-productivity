@@ -748,67 +748,91 @@ type PMNode = {
 };
 
 /**
- * Drop top-level taskRef chips whose task is no longer part of `ctx.taskIds`,
- * and append any in `ctx.taskIds` that aren't yet in the doc.
+ * Rebuild the top-level chip ordering from `ctx.taskIds` (the host's
+ * canonical order for this view) while keeping any user-customised
+ * non-chip blocks (headings, paragraphs, dividers) at the END of the
+ * doc so they aren't lost.
  *
- * The case that motivated this is TODAY: the doc is persisted by ctx.id =
- * 'TODAY', but the membership of TODAY changes every day. Without this
- * step the editor would show yesterday's tasks (still in the saved doc)
- * and miss today's (never inserted). Same drift applies to TAG contexts.
+ * Why rebuild rather than just filter+append:
+ *  - TODAY's ordering changes daily (TODAY_TAG.taskIds). A doc saved
+ *    yesterday will have stale order — the regular TODAY view re-sorts,
+ *    but the stored doc holds the old layout. Diagnostic confirmed: all
+ *    chips were present, just in stored order, not ctx order.
+ *  - Stored docs from earlier iterations contain duplicate subtask rows
+ *    (a previous bug). Rebuilding lets us dedupe.
  *
- * When we drop a taskRef, we also drop the contiguous run of subTaskRefs
- * that immediately followed it — those belong to that parent group.
+ * Trade-off: interleaved customisations (e.g. "paragraph between two
+ * chips") lose their original anchor and end up at the doc tail. Pure
+ * text-only blocks survive but appear in one block at the bottom; this
+ * is documented in ADR #5's "Open known limitations".
  */
 const reconcileTopLevelTaskRefs = (doc: unknown, ctx: ActiveWorkContext): unknown => {
   const root = doc as PMNode;
   if (!root || root.type !== 'doc' || !Array.isArray(root.content)) return doc;
-  const wanted = new Set(ctx.taskIds);
   const src = root.content as (PMNode | PMText)[];
-  const out: (PMNode | PMText)[] = [];
-  const kept = new Set<string>();
+
+  // Pass 1: index stored chip groups by parent taskId. Dedupe subtask
+  // rows within a group while we're at it.
+  const storedGroups = new Map<string, PMNode[]>();
+  const nonChipBlocks: (PMNode | PMText)[] = [];
+  let headingNode: PMNode | null = null;
+
   let i = 0;
   while (i < src.length) {
     const node = src[i] as PMNode;
     if (node.type === 'taskRef') {
       const taskId = (node.attrs?.taskId as string) || '';
-      if (wanted.has(taskId)) {
-        out.push(node);
-        kept.add(taskId);
-        // Carry trailing subTaskRefs along with the parent.
-        let j = i + 1;
-        while (j < src.length && (src[j] as PMNode).type === 'subTaskRef') {
-          out.push(src[j]);
-          j++;
+      const group: PMNode[] = [node];
+      const seenSubs = new Set<string>();
+      let j = i + 1;
+      while (j < src.length && (src[j] as PMNode).type === 'subTaskRef') {
+        const subId = ((src[j] as PMNode).attrs?.taskId as string) || '';
+        if (subId && !seenSubs.has(subId)) {
+          seenSubs.add(subId);
+          group.push(src[j] as PMNode);
         }
-        i = j;
-      } else {
-        // Out-of-context parent — skip it AND its subtask run.
-        let j = i + 1;
-        while (j < src.length && (src[j] as PMNode).type === 'subTaskRef') j++;
-        i = j;
+        j++;
       }
+      // Only the first stored group for a given parent is kept; later
+      // duplicates of the same parent taskId are discarded silently.
+      if (taskId && !storedGroups.has(taskId)) {
+        storedGroups.set(taskId, group);
+      }
+      i = j;
     } else if (node.type === 'subTaskRef') {
-      // Orphan subtask (parent was removed earlier in some old save).
-      // Drop it so the doc doesn't carry a row attached to nothing.
+      // Orphan subtask — drop it.
+      i++;
+    } else if (!headingNode && node.type === 'heading') {
+      // Preserve the first heading as the doc title at the top.
+      headingNode = node;
       i++;
     } else {
-      out.push(node);
+      nonChipBlocks.push(node);
       i++;
     }
   }
-  // Append any wanted ids that weren't in the doc, preserving ctx order.
-  // Insert before the trailing paragraph (if any) so the empty line stays
-  // at the doc end.
-  const trailing: (PMNode | PMText)[] = [];
-  while (out.length > 0 && (out[out.length - 1] as PMNode).type === 'paragraph') {
-    trailing.unshift(out.pop()!);
-  }
+
+  // Pass 2: rebuild content in ctx order.
+  const out: (PMNode | PMText)[] = [];
+  if (headingNode) out.push(headingNode);
   for (const id of ctx.taskIds) {
-    if (!kept.has(id)) {
-      for (const n of taskRefWithSubtasksJSON(id) as (PMNode | PMText)[]) out.push(n);
+    const group = storedGroups.get(id);
+    if (group) {
+      for (const n of group) out.push(n);
+    } else {
+      // New task in this context — emit a fresh chip group.
+      for (const n of taskRefWithSubtasksJSON(id) as PMNode[]) out.push(n);
     }
   }
-  for (const t of trailing) out.push(t);
+  // Append the custom non-chip blocks at the end, preserving their order.
+  // A trailing paragraph (the editor's "press / for commands" line) ends
+  // up here too which is the right place for it.
+  for (const n of nonChipBlocks) out.push(n);
+  // Ensure the doc ends with an empty paragraph so the cursor has a
+  // place to land below the last chip.
+  if (out.length === 0 || (out[out.length - 1] as PMNode).type !== 'paragraph') {
+    out.push({ type: 'paragraph' });
+  }
   return { ...root, content: out };
 };
 
