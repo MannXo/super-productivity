@@ -49,10 +49,8 @@ describe('OperationLogUploadService', () => {
     mockLockService = jasmine.createSpyObj('LockService', ['request']);
 
     // Default mock implementations
-    mockLockService.request.and.callFake(
-      async (_name: string, fn: () => Promise<void>) => {
-        await fn();
-      },
+    mockLockService.request.and.callFake(async <T>(_name: string, fn: () => Promise<T>) =>
+      fn(),
     );
     mockOpLogStore.getUnsynced.and.returnValue(Promise.resolve([]));
     mockOpLogStore.markSynced.and.returnValue(Promise.resolve());
@@ -1351,10 +1349,11 @@ describe('OperationLogUploadService', () => {
         const callOrder: string[] = [];
 
         mockLockService.request.and.callFake(
-          async (_name: string, fn: () => Promise<void>) => {
+          async <T>(_name: string, fn: () => Promise<T>) => {
             callOrder.push('lock-acquired');
-            await fn();
+            const r = await fn();
             callOrder.push('lock-released');
+            return r;
           },
         );
 

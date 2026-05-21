@@ -1574,6 +1574,16 @@ export class OperationLogStoreService implements RemoteOperationApplyStorePort<O
    * the clientId (stored in the separate `pf` database) own that rollback —
    * including the no-prior-clientId edge case, where the rotated id is
    * intentionally left in `pf` on failure (see ClientIdService.withRotation).
+   *
+   * Payload duplication trade-off: `syncImportOp.payload` (full state) is
+   * written to OPS, and the structurally identical `newState` is written to
+   * STATE_CACHE in the same tx. Both writes are required: OPS holds the
+   * payload the uploader sends in the snapshot endpoint; STATE_CACHE is what
+   * `isWhollyFreshClient` reads on next launch. Eliminating the duplication
+   * would require either lazy hydration of the OPS payload from STATE_CACHE
+   * at upload time (unsafe if compaction advances STATE_CACHE past this seq)
+   * or a dedicated payload-staging store; both add complexity disproportionate
+   * to the cost of one extra structured-clone on an infrequent operation.
    */
   async runDestructiveStateReplacement(opts: {
     syncImportOp: Operation;

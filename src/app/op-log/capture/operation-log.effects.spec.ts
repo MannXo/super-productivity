@@ -80,10 +80,8 @@ describe('OperationLogEffects', () => {
     ]);
 
     // Default mock implementations
-    mockLockService.request.and.callFake(
-      async (_name: string, fn: () => Promise<void>) => {
-        await fn();
-      },
+    mockLockService.request.and.callFake(async <T>(_name: string, fn: () => Promise<T>) =>
+      fn(),
     );
     mockOpLogStore.append.and.returnValue(Promise.resolve(1));
     mockOpLogStore.appendWithVectorClockUpdate.and.returnValue(Promise.resolve(1));
@@ -195,9 +193,9 @@ describe('OperationLogEffects', () => {
     it('should load clientId only after acquiring operation log lock', (done) => {
       const callOrder: string[] = [];
       mockLockService.request.and.callFake(
-        async (_name: string, fn: () => Promise<void>) => {
+        async <T>(_name: string, fn: () => Promise<T>) => {
           callOrder.push('lock');
-          await fn();
+          return fn();
         },
       );
       mockClientIdService.loadClientId.and.callFake(async () => {

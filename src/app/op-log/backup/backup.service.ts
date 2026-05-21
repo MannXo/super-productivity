@@ -186,9 +186,12 @@ export class BackupService {
       OpLog.normal('BackupService: Backing up current state before import...');
       await this._opLogStore.saveImportBackup(currentState);
     } catch (e) {
+      // `message` is intentionally omitted: log history is user-exportable
+      // (CLAUDE.md sync rule 9), and a future validator/IDB error type could
+      // interpolate user content into its message. Match the `name`-only
+      // pattern used by `ClientIdService.withRotation` rollback logging.
       OpLog.warn('BackupService: Failed to backup state before import:', {
         name: (e as Error | undefined)?.name,
-        message: (e as Error | undefined)?.message,
       });
       throw new Error(
         'BackupService: Pre-import backup failed; aborting import to preserve local state.',

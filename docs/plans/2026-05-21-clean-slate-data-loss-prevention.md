@@ -68,60 +68,20 @@ async runDestructiveStateReplacement(opts: {
   syncImportOp: Operation;
   newVectorClock: VectorClock;
   newState: unknown;
-  lastAppliedOpSeq: number;
   schemaVersion: number;
+  snapshotEntityKeys: string[];
+  archiveYoung?: ArchiveStoreEntry['data'];
+  archiveOld?: ArchiveStoreEntry['data'];
 }): Promise<void>
 ```
 
-Two callers refactor to use it: `CleanSlateService.createCleanSlate()` (lines 149-168) and `BackupService.importComplete()` (lines 194-227). Both currently run the four-step sequence as independent IDB transactions.
+Two callers refactor to use it: `CleanSlateService.createCleanSlate()` and `BackupService.importComplete()`. Both previously ran a four-step sequence as independent IDB transactions.
 
-**Implementation: snapshot-then-swap, not multi-store transaction** (per Alternatives alt #2 + Performance W1):
+**Implementation: single multi-store readwrite transaction.** All writes (clear OPS, append the SYNC_IMPORT entry, write vector_clock, write state_cache, optionally write archive_young / archive_old) happen inside one `db.transaction(stores, 'readwrite')`. If any step rejects the IDB request, `tx.done` rejects, the engine auto-aborts, and no committed change to any of the touched stores survives. The catch block calls an explicit `tx.abort()` as well — that branch is unreachable in production (rejected IDB requests already abort the tx) but is load-bearing for the spy-based fault-injection seam used by the interrupt integration test, where the spy throws synchronously instead of rejecting an IDB request.
 
-```ts
-async runDestructiveStateReplacement(opts) {
-  // Step 1: Stage the new snapshot to STATE_CACHE under STAGING_KEY (single-store write,
-  // single record, can carry a multi-MB payload without tx-lifetime concerns)
-  await this.db.put(STORE_NAMES.STATE_CACHE, {
-    id: STATE_CACHE_STAGING_KEY,
-    state: opts.newState,
-    lastAppliedOpSeq: opts.lastAppliedOpSeq,
-    vectorClock: opts.newVectorClock,
-    compactedAt: Date.now(),
-    schemaVersion: opts.schemaVersion,
-  });
+**Why a single multi-store tx, not snapshot-then-swap.** The plan's first revision proposed staging the new state to a `STATE_CACHE_STAGING_KEY` row outside the destructive tx, then swapping references inside a small cross-store tx, on the premise that "every existing `db.transaction(...)` call in `operation-log-store.service.ts` is single-store" and WebKit/Capacitor had no precedent for multi-store + multi-MB. That premise was wrong: `appendWithVectorClockUpdate` already runs a 2-store (`OPS` + `VECTOR_CLOCK`) readwrite tx on every local action, including on Capacitor iOS. Staging would have cost one extra full-state structured-clone, a boot-time staging-row reconciliation step on every cold start, a catch-block cleanup, two integration tests, and ~30 lines of JSDoc — in exchange for a crash-detection sentinel nothing would have acted on. The simpler design provides the same atomicity guarantee with none of the machinery.
 
-  // Step 2: Verify the stage write (round-trip read)
-  const staged = await this.db.get(STORE_NAMES.STATE_CACHE, STATE_CACHE_STAGING_KEY);
-  if (!staged || staged.state === undefined) {
-    throw new Error('Clean-slate stage write failed verification');
-  }
-
-  // Step 3: Destructive transaction — small writes only, all stores
-  const tx = this.db.transaction(
-    [STORE_NAMES.OPS, STORE_NAMES.STATE_CACHE, STORE_NAMES.VECTOR_CLOCK],
-    'readwrite',
-  );
-  await tx.objectStore(STORE_NAMES.OPS).clear();
-  await tx.objectStore(STORE_NAMES.OPS).put(/* the SyncImportEntry built from syncImportOp */);
-  await tx.objectStore(STORE_NAMES.VECTOR_CLOCK).put({ clock: opts.newVectorClock, lastUpdate: Date.now() }, SINGLETON_KEY);
-  await tx.objectStore(STORE_NAMES.STATE_CACHE).put({ ...staged, id: SINGLETON_KEY });
-  await tx.objectStore(STORE_NAMES.STATE_CACHE).delete(STATE_CACHE_STAGING_KEY);
-  await tx.done;
-
-  // Step 4: Cache invalidation
-  this._appliedOpIdsCache = null;
-  this._cacheLastSeq = 0;
-  this._invalidateUnsyncedCache();
-  this._vectorClockCache = opts.newVectorClock;
-}
-```
-
-**Boot-time reconciliation:** On `_ensureInit`, if `STATE_CACHE_STAGING_KEY` exists, delete it. A staging row that survived means the destructive tx never committed; the device's prior state is intact and the staging row is dead weight.
-
-**Why snapshot-then-swap over a single 3-store tx with the full state inside it:**
-- The large `state` payload (hundreds of KB to MB for users with archives) lives in a single-store write *outside* the destructive tx. The destructive tx contains only small writes (`clear`, three small `put`s, one `delete`).
-- WebKit on Capacitor iOS has no precedent in this codebase for multi-store readwrite transactions carrying multi-MB payloads (every existing `db.transaction(...)` call in `operation-log-store.service.ts` is single-store). The snapshot-then-swap pattern keeps the cross-store tx small enough to avoid testing the limits.
-- Performance W1's recommendation to "smoke test multi-store tx on each runtime" still applies, but the surface area to test is much smaller.
+**Payload duplication trade-off.** Both `syncImportOp.payload` (full state) and `newState` (structurally identical) are persisted in the same tx: the payload via the OPS row's encoded operation, the state via the STATE_CACHE singleton. Both writes are required — OPS holds the payload the uploader sends in the snapshot endpoint; STATE_CACHE is what `isWhollyFreshClient` reads on next launch. Eliminating the duplication would require either lazy hydration of the OPS payload from STATE_CACHE at upload time (unsafe if compaction advances STATE_CACHE past this op's seq) or a dedicated payload-staging store. Neither pays back for an infrequent (password change / backup restore) operation.
 
 **On `pre-migration-backup.service.ts` — DELETED in PR-A.** The original plan kept a placeholder `PreMigrationBackupService` and proposed implementing it as a recovery path independent of IDB atomicity. With `runDestructiveStateReplacement` now atomic, the safety net it was meant to provide (recover from a partial destructive write) cannot fire — the destructive tx either fully commits or fully rolls back. The placeholder service was deleted along with its DI wiring and stub tests. If a future requirement appears for "user-initiated undo of a successful clean-slate," that should be designed as its own feature, not a vestigial backup layer.
 
@@ -332,7 +292,7 @@ Code references verified at `feat/issue-7709-567f99` HEAD `c5158dd35b`:
   - Corrected Fix 3 — line 606 has no `snapshotState`; synthetic descriptor for op-streaming case; introduced `RemoteDataDescriptor` discriminated union.
   - Corrected Fix 1 caller graph — `createCleanSlate` has only one production caller; preflight wraps three independent call sites if it ships.
   - Cut preflight (Fix 1) from v1; gated on log evidence from Fix 4.
-  - Switched atomicity from multi-store-tx-with-large-payload to snapshot-then-swap (smaller destructive tx, sidesteps WebKit/Capacitor concerns).
+  - Initially switched atomicity from multi-store-tx-with-large-payload to snapshot-then-swap; later reverted to single multi-store tx after verifying `appendWithVectorClockUpdate` already uses multi-store readwrite on every action (the staging row was over-engineering on a wrong premise).
   - Switched from inline IDB calls to `runDestructiveStateReplacement` helper (BackupService is a second caller, helper justified).
   - Acknowledged `pre-migration-backup.service.ts` is a placeholder; PR-A implements it for real.
   - Removed Q3 schema-migration cost claim (STATE_CACHE rows already support optional fields).

@@ -112,8 +112,9 @@ describe('CleanSlateService', () => {
       });
       mockLockService.request.and.callFake(async (lockName, fn) => {
         callOrder.push(`lock:${lockName}`);
-        await fn();
+        const r = await fn();
         callOrder.push('unlock');
+        return r;
       });
       mockStateSnapshotService.getStateSnapshotAsync.and.callFake(async () => {
         callOrder.push('snapshot');

@@ -44,7 +44,7 @@ export class ClientIdService {
 
     if (clientId) {
       this._cachedClientId = clientId;
-      OpLog.normal('ClientIdService.loadClientId() loaded:', { clientId });
+      OpLog.normal('ClientIdService.loadClientId() loaded');
     }
     return clientId;
   }
@@ -64,7 +64,7 @@ export class ClientIdService {
     await db.put(DB_STORE_NAME, newClientId, CLIENT_ID_KEY);
 
     this._cachedClientId = newClientId;
-    OpLog.normal('ClientIdService.generateNewClientId() generated:', { newClientId });
+    OpLog.normal('ClientIdService.generateNewClientId() generated');
     return newClientId;
   }
 
@@ -82,7 +82,7 @@ export class ClientIdService {
     const db = await this._getDb();
     await db.put(DB_STORE_NAME, clientId, CLIENT_ID_KEY);
     this._cachedClientId = clientId;
-    OpLog.normal('ClientIdService.persistClientId() persisted:', { clientId });
+    OpLog.normal('ClientIdService.persistClientId() persisted');
   }
 
   /**
@@ -169,10 +169,11 @@ export class ClientIdService {
         // Unrecognized format — log but treat as missing rather than throwing.
         // Throwing here permanently blocks sync (issue #6197: "Invalid clientId loaded: B_H8AR").
         // Returning null causes the caller to generate a fresh clientId, which unblocks sync.
+        // Length only — the literal clientId value is sensitive (vector-clock
+        // key) and log history is user-exportable (CLAUDE.md sync rule 9).
         OpLog.critical(
           'ClientIdService.loadClientId() Invalid clientId format, will regenerate:',
           {
-            clientId,
             length: clientId.length,
           },
         );

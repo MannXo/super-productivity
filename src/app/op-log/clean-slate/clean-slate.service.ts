@@ -70,46 +70,46 @@ export class CleanSlateService {
   ): Promise<void> {
     await this.operationWriteFlushService.flushPendingWrites();
 
-    let result: { syncImportId: string; newClientId: string } | null = null;
+    const { syncImportId } = await this.lockService.request(
+      LOCK_NAMES.OPERATION_LOG,
+      async () => {
+        // Diagnostic snapshot of state about to be wiped. Captured before any
+        // mutation. Lets a future sync-stuck incident be correlated to the local
+        // op-log shape that preceded the destructive recovery (count of unsynced
+        // user work, prior vector-clock entries) without forensic recovery.
+        const priorClock = await this.opLogStore.getVectorClock();
+        const priorUnsynced = await this.opLogStore.getUnsynced();
+        const priorOpTypeBreakdown = priorUnsynced.reduce<Record<string, number>>(
+          (acc, entry) => {
+            const key = entry.op.opType;
+            acc[key] = (acc[key] ?? 0) + 1;
+            return acc;
+          },
+          {},
+        );
+        OpLog.normal('[CleanSlate] Starting clean slate process', {
+          reason,
+          syncImportReason,
+          priorUnsyncedCount: priorUnsynced.length,
+          priorUnsyncedByOpType: priorOpTypeBreakdown,
+          priorClockSize: priorClock ? Object.keys(priorClock).length : 0,
+        });
 
-    await this.lockService.request(LOCK_NAMES.OPERATION_LOG, async () => {
-      // Diagnostic snapshot of state about to be wiped. Captured before any
-      // mutation. Lets a future sync-stuck incident be correlated to the local
-      // op-log shape that preceded the destructive recovery (count of unsynced
-      // user work, prior vector-clock entries) without forensic recovery.
-      const priorClock = await this.opLogStore.getVectorClock();
-      const priorUnsynced = await this.opLogStore.getUnsynced();
-      const priorOpTypeBreakdown = priorUnsynced.reduce<Record<string, number>>(
-        (acc, entry) => {
-          const key = entry.op.opType;
-          acc[key] = (acc[key] ?? 0) + 1;
-          return acc;
-        },
-        {},
-      );
-      OpLog.normal('[CleanSlate] Starting clean slate process', {
-        reason,
-        syncImportReason,
-        priorUnsyncedCount: priorUnsynced.length,
-        priorUnsyncedByOpType: priorOpTypeBreakdown,
-        priorClockSize: priorClock ? Object.keys(priorClock).length : 0,
-      });
+        // 1. Get current application state (includes all features + archives).
+        // IMPORTANT: must use the async version to load real archives from
+        // IndexedDB. The sync getStateSnapshot() returns DEFAULT_ARCHIVE (empty)
+        // which causes data loss.
+        const currentState = await this.stateSnapshotService.getStateSnapshotAsync();
 
-      // 1. Get current application state (includes all features + archives).
-      // IMPORTANT: must use the async version to load real archives from
-      // IndexedDB. The sync getStateSnapshot() returns DEFAULT_ARCHIVE (empty)
-      // which causes data loss.
-      const currentState = await this.stateSnapshotService.getStateSnapshotAsync();
-
-      // Rotate the clientId for the duration of the destructive replacement.
-      // The clientId lives in a separate IDB database (`pf`) and so cannot
-      // share the atomic SUP_OPS tx below; ClientIdService.withRotation rolls
-      // it back on failure so `pf` and `SUP_OPS` agree on the device's
-      // clientId after this method returns or throws.
-      result = await this.clientIdService.withRotation(
-        '[CleanSlate]',
-        async (newClientId) => {
-          OpLog.normal('[CleanSlate] Generated new client ID', { newClientId });
+        // Rotate the clientId for the duration of the destructive replacement.
+        // The clientId lives in a separate IDB database (`pf`) and so cannot
+        // share the atomic SUP_OPS tx below; ClientIdService.withRotation rolls
+        // it back on failure so `pf` and `SUP_OPS` agree on the device's
+        // clientId after this method returns or throws.
+        return this.clientIdService.withRotation('[CleanSlate]', async (newClientId) => {
+          OpLog.normal('[CleanSlate] Generated new client ID', {
+            newClientIdSuffix: newClientId.slice(-3),
+          });
 
           const newVectorClock = { [newClientId]: 1 };
           const syncImportOp: Operation = {
@@ -128,7 +128,6 @@ export class CleanSlateService {
 
           OpLog.normal('[CleanSlate] Created SYNC_IMPORT operation', {
             opId: syncImportOp.id,
-            clientId: newClientId,
           });
 
           OpLog.normal('[CleanSlate] Replacing op-log + state cache atomically');
@@ -140,19 +139,13 @@ export class CleanSlateService {
             snapshotEntityKeys: extractEntityKeysFromState(currentState),
           });
 
-          return { syncImportId: syncImportOp.id, newClientId };
-        },
-      );
-    });
-
-    if (!result) {
-      throw new Error('[CleanSlate] Clean slate completed without a replacement result');
-    }
-    const cleanSlateResult = result as { syncImportId: string; newClientId: string };
+          return { syncImportId: syncImportOp.id };
+        });
+      },
+    );
 
     OpLog.normal('[CleanSlate] Clean slate completed successfully', {
-      syncImportId: cleanSlateResult.syncImportId,
-      newClientId: cleanSlateResult.newClientId,
+      syncImportId,
       reason,
     });
   }

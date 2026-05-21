@@ -201,9 +201,7 @@ describe('RemoteOpsProcessingService', () => {
     lockServiceSpy = jasmine.createSpyObj('LockService', ['request']);
     // Default: execute callback immediately (simulating lock acquisition)
     lockServiceSpy.request.and.callFake(
-      async (_name: string, callback: () => Promise<void>) => {
-        await callback();
-      },
+      async <T>(_name: string, callback: () => Promise<T>) => callback(),
     );
     compactionServiceSpy = jasmine.createSpyObj('OperationLogCompactionService', [
       'compact',
@@ -329,9 +327,9 @@ describe('RemoteOpsProcessingService', () => {
         callOrder.push('flushPendingWrites');
       });
       lockServiceSpy.request.and.callFake(
-        async (_name: string, callback: () => Promise<void>) => {
+        async <T>(_name: string, callback: () => Promise<T>) => {
           callOrder.push('lockAcquired');
-          await callback();
+          return callback();
         },
       );
       spyOn(service, 'detectConflicts').and.callFake(async () => {

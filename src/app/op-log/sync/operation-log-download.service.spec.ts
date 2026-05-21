@@ -50,7 +50,7 @@ describe('OperationLogDownloadService', () => {
 
     // Default mock implementations
     // Note: Don't use async/await here as it breaks fakeAsync zone context
-    mockLockService.request.and.callFake((_name: string, fn: () => Promise<void>) => {
+    mockLockService.request.and.callFake(<T>(_name: string, fn: () => Promise<T>) => {
       return fn();
     });
     mockOpLogStore.getAppliedOpIds.and.returnValue(Promise.resolve(new Set<string>()));

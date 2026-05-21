@@ -129,10 +129,8 @@ describe('done task operation replay', () => {
       ['updatePendingOpsStatus'],
     );
 
-    mockLockService.request.and.callFake(
-      async (_name: string, fn: () => Promise<void>) => {
-        await fn();
-      },
+    mockLockService.request.and.callFake(async <T>(_name: string, fn: () => Promise<T>) =>
+      fn(),
     );
     mockOpLogStore.appendWithVectorClockUpdate.and.returnValue(Promise.resolve(1));
     mockOpLogStore.getCompactionCounter.and.returnValue(Promise.resolve(0));

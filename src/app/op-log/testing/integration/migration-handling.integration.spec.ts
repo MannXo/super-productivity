@@ -77,7 +77,7 @@ describe('Migration Handling Integration', () => {
         {
           provide: LockService,
           useValue: {
-            request: async (_name: string, fn: () => Promise<void>) => fn(),
+            request: async <T>(_name: string, fn: () => Promise<T>) => fn(),
           },
         },
         {
