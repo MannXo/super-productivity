@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Document Mode</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        height: 100%;
+        background: transparent;
+        color: var(--text-color, #222);
+        font-family: var(--font-primary-stack, sans-serif);
+      }
+      #editor-root {
+        max-width: 720px;
+        margin: 0 auto;
+        padding: var(--s4, 32px) var(--s2, 16px);
+      }
+      .ProseMirror {
+        outline: none;
+        min-height: 60vh;
+        font-weight: 500;
+      }
+      .ProseMirror p {
+        margin: 0.4em 0;
+      }
+      .ProseMirror h1 {
+        font-size: 1.8em;
+        margin: 0.6em 0 0.3em;
+      }
+      .ProseMirror h2 {
+        font-size: 1.4em;
+        margin: 0.5em 0 0.25em;
+      }
+      .ProseMirror h3 {
+        font-size: 1.15em;
+        margin: 0.4em 0 0.2em;
+      }
+      .ProseMirror hr {
+        border: none;
+        border-top: 1px solid var(--divider-color, #ccc);
+        margin: 1em 0;
+      }
+      .ProseMirror .is-editor-empty:first-child::before {
+        color: var(--text-color-muted, #999);
+        opacity: 0.5;
+        content: attr(data-placeholder);
+        float: left;
+        height: 0;
+        pointer-events: none;
+      }
+      .task-ref {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: var(--task-c-bg, rgba(0, 0, 0, 0.03));
+        margin: 2px 0;
+        cursor: pointer;
+        user-select: none;
+      }
+      .task-ref:hover {
+        background: var(--task-c-bg, rgba(0, 0, 0, 0.06));
+      }
+      .task-ref input[type='checkbox'] {
+        flex-shrink: 0;
+      }
+      .task-ref .title {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .task-ref.is-done .title {
+        text-decoration: line-through;
+        opacity: var(--task-is-done-dim-opacity, 0.5);
+      }
+      .task-ref.is-missing {
+        opacity: 0.4;
+        font-style: italic;
+      }
+      .slash-menu {
+        position: absolute;
+        z-index: 100;
+        background: var(--card-bg, #fff);
+        border-radius: 8px;
+        box-shadow: var(--whiteframe-shadow-6dp, 0 4px 12px rgba(0, 0, 0, 0.15));
+        padding: 6px 0;
+        min-width: 200px;
+        max-height: 320px;
+        overflow-y: auto;
+      }
+      .slash-menu-item {
+        padding: 8px 14px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      .slash-menu-item:hover,
+      .slash-menu-item.is-active {
+        background: var(--select-hover-bg, rgba(0, 0, 0, 0.08));
+      }
+    </style>
+  </head>
+  <body>
+    <div id="editor-root"></div>
+    <script src="editor.js"></script>
+  </body>
+</html>
