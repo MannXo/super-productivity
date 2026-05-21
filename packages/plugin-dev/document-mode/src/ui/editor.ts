@@ -28,6 +28,10 @@ const STORAGE_VERSION = 1;
 interface StoredState {
   version: number;
   docs: Record<string, unknown>; // ctxId -> ProseMirror JSON
+  // We don't model enabledCtxIds here — the background script owns it. The
+  // editor preserves whatever fields it doesn't recognize via
+  // read-modify-write at save time.
+  [key: string]: unknown;
 }
 
 let currentCtx: ActiveWorkContext | null = null;
@@ -149,21 +153,26 @@ const TaskRefNode = Node.create({
 /* Persistence                                                                 */
 /* -------------------------------------------------------------------------- */
 
-const loadStoredState = async (): Promise<void> => {
+const readBlob = async (): Promise<StoredState> => {
   try {
     const raw = await PluginAPI.loadSyncedData();
-    if (!raw) return;
+    if (!raw) return { version: STORAGE_VERSION, docs: {} };
     const parsed = JSON.parse(raw) as StoredState;
-    if (parsed && typeof parsed === 'object' && parsed.docs) {
-      storedState = {
+    if (parsed && typeof parsed === 'object') {
+      return {
+        ...parsed,
         version: parsed.version || STORAGE_VERSION,
-        docs: parsed.docs,
+        docs: parsed.docs || {},
       };
     }
   } catch (err) {
     PluginAPI.log.err('Failed to parse stored doc state', err);
-    storedState = { version: STORAGE_VERSION, docs: {} };
   }
+  return { version: STORAGE_VERSION, docs: {} };
+};
+
+const loadStoredState = async (): Promise<void> => {
+  storedState = await readBlob();
 };
 
 const flushSave = async (): Promise<void> => {
@@ -172,9 +181,16 @@ const flushSave = async (): Promise<void> => {
     saveTimer = null;
   }
   if (!currentCtx || !editor) return;
-  storedState.docs[currentCtx.id] = editor.getJSON();
+  // Read-modify-write: pull the latest blob from storage so we don't clobber
+  // the background script's enabledCtxIds or any other field added later.
   try {
-    await PluginAPI.persistDataSynced(JSON.stringify(storedState));
+    const latest = await readBlob();
+    const merged: StoredState = {
+      ...latest,
+      docs: { ...latest.docs, [currentCtx.id]: editor.getJSON() },
+    };
+    storedState = merged;
+    await PluginAPI.persistDataSynced(JSON.stringify(merged));
   } catch (err) {
     PluginAPI.log.err('persistDataSynced failed', err);
   }
