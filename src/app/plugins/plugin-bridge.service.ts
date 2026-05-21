@@ -1196,11 +1196,18 @@ export class PluginBridgeService implements OnDestroy {
     }
     const button: PluginWorkContextHeaderBtnCfg = { ...cfg, pluginId };
     const current = this._workContextHeaderButtons();
-    if (current.some((b) => b.pluginId === pluginId && b.label === cfg.label)) {
-      PluginLog.warn('PluginBridge: duplicate work-context header button, skipping', {
-        pluginId,
-        label: cfg.label,
-      });
+    const existingIdx = current.findIndex(
+      (b) => b.pluginId === pluginId && b.label === cfg.label,
+    );
+    if (existingIdx >= 0) {
+      // Re-registration: iframe reloads (e.g. work-view embed re-mount with
+      // skipCleanupOnDestroy: true) produce a fresh onClick closure
+      // pointing at the *new* iframe Window. Replace the old entry so the
+      // host's wrapper posts back into the live iframe instead of a
+      // detached one.
+      const next = current.slice();
+      next[existingIdx] = button;
+      this._workContextHeaderButtons.set(next);
       return;
     }
     this._workContextHeaderButtons.set([...current, button]);

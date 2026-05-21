@@ -38,6 +38,19 @@ let taskCache = new Map<string, Task>();
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let editor: Editor | null = null;
 let isLoadingDoc = false;
+// Set when the stored doc for the current ctx failed to parse and we fell
+// back to an empty seed. Gates scheduleSave so the empty seed is not
+// auto-persisted on top of the original (possibly corrupt) blob.
+let isDocCorrupt = false;
+// Monotonic guard for setActiveContext: concurrent calls (rapid context
+// switches) read this to drop after their awaits if a newer call has
+// superseded them.
+let activeContextSeq = 0;
+// Snapshot of cached task ids at the last `setActiveContext` / external
+// task update, used by `onAnyTaskUpdate` to detect *genuinely new* tasks
+// (transition absent→present) and avoid re-appending chips the user has
+// already removed.
+let lastSeenTaskIds = new Set<string>();
 
 /**
  * Safe error log: PluginAPI.log is declared on the type but currently not
@@ -149,19 +162,32 @@ const createSubTaskAfter = async (
  * Walk doc backwards from a position to find which top-level taskRef owns
  * the subtask that lives at that position. Returns its taskId, or null
  * if there is no owning parent (orphan subTaskRef).
+ *
+ * Uses manual childCount iteration rather than `doc.resolve(pos).index(0)`
+ * — the latter's gap-vs-node semantics at top-level boundaries differ
+ * subtly across the docs and at least one reviewer flagged it as
+ * mis-resolving for certain positions. Iterating cursors is provably
+ * correct and runs in O(childCount) which is fine for our doc sizes.
  */
 const findParentTaskIdBefore = (subTaskRefPos: number): string | null => {
   if (!editor) return null;
   const doc = editor.state.doc;
-  const idx = doc.resolve(subTaskRefPos).index(0);
-  for (let i = idx - 1; i >= 0; i--) {
+  let subIdx = -1;
+  let cursor = 0;
+  for (let i = 0; i < doc.childCount; i++) {
+    if (cursor === subTaskRefPos) {
+      subIdx = i;
+      break;
+    }
+    cursor += doc.child(i).nodeSize;
+  }
+  if (subIdx < 0) return null;
+  for (let i = subIdx - 1; i >= 0; i--) {
     const child = doc.child(i);
     if (child.type.name === 'taskRef') {
       return (child.attrs.taskId as string) || null;
     }
-    if (child.type.name === 'subTaskRef') {
-      continue;
-    }
+    if (child.type.name === 'subTaskRef') continue;
     return null;
   }
   return null;
@@ -630,6 +656,10 @@ const flushSave = async (): Promise<void> => {
 
 const scheduleSave = (): void => {
   if (isLoadingDoc) return;
+  // Refuse to persist while the doc is a fallback (loaded from a blob we
+  // couldn't parse). Saving here would overwrite the original blob with
+  // an empty seed.
+  if (isDocCorrupt) return;
   if (saveTimer !== null) clearTimeout(saveTimer);
   saveTimer = setTimeout(() => {
     void flushSave();
@@ -777,12 +807,32 @@ const refreshTaskCache = async (): Promise<void> => {
 };
 
 const setActiveContext = async (ctx: ActiveWorkContext | null): Promise<void> => {
+  // Take a sequence number for this invocation. If a newer call arrives
+  // (rapid context switches), the older one bails after each await so it
+  // can't write the previous editor doc under the new context's id.
+  const seq = ++activeContextSeq;
   await flushSave();
+  if (seq !== activeContextSeq) return;
+
+  // Drop pending title writes from the previous context — letting them
+  // resolve later would mutate `taskCache` against tasks the new context
+  // may not even own.
+  for (const t of titleWriteTimers.values()) clearTimeout(t);
+  titleWriteTimers.clear();
+  pendingTitleWrites.clear();
+  lastWrittenTitles.clear();
+
   currentCtx = ctx;
+  isDocCorrupt = false;
   if (!ctx || !editor) return;
 
   isLoadingDoc = true;
   await refreshTaskCache();
+  if (seq !== activeContextSeq) {
+    isLoadingDoc = false;
+    return;
+  }
+  lastSeenTaskIds = new Set(taskCache.keys());
 
   const stored = storedState.docs[ctx.id];
   const docJson = stored
@@ -794,7 +844,11 @@ const setActiveContext = async (ctx: ActiveWorkContext | null): Promise<void> =>
       false,
     );
   } catch (err) {
-    logErr('setContent failed, seeding fresh', err);
+    // Parsing the stored blob failed. Don't auto-save the fallback —
+    // scheduleSave is gated by isDocCorrupt so the empty seed cannot
+    // overwrite the (possibly recoverable) original.
+    logErr('setContent failed; suppressing saves to protect blob', err);
+    isDocCorrupt = true;
     editor.commands.setContent(
       buildSeedDoc(ctx) as Parameters<typeof editor.commands.setContent>[0],
       false,
@@ -874,9 +928,13 @@ const insertSubtaskByParent = (taskId: string, parentTaskId: string): void => {
 /**
  * Per-task debouncers for writing edited titles back to the host. Pending
  * writes prevent ANY_TASK_UPDATE echoes from clobbering the user's typing.
+ * `lastWrittenTitles` holds the value we last successfully wrote, so we
+ * can distinguish our own echo from a genuine remote change in
+ * refreshTaskRef.
  */
 const titleWriteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const pendingTitleWrites = new Set<string>();
+const lastWrittenTitles = new Map<string, string>();
 
 const writeTitleBack = (taskId: string, newTitle: string): void => {
   const existing = titleWriteTimers.get(taskId);
@@ -888,6 +946,10 @@ const writeTitleBack = (taskId: string, newTitle: string): void => {
       titleWriteTimers.delete(taskId);
       PluginAPI.updateTask(taskId, { title: newTitle })
         .then(() => {
+          // Record what we wrote so refreshTaskRef can recognise the echo
+          // and skip it without needing the time-based pendingTitleWrites
+          // guard (which races with genuine remote edits).
+          lastWrittenTitles.set(taskId, newTitle);
           const cached = taskCache.get(taskId);
           if (cached) taskCache.set(taskId, { ...cached, title: newTitle });
         })
@@ -986,21 +1048,35 @@ const refreshTaskRef = (taskId: string): void => {
 
 const onAnyTaskUpdate = (payload: AnyTaskUpdatePayload): void => {
   if (!currentCtx || !editor) return;
+  const ctxSnapshot = currentCtx;
   void refreshTaskCache().then(() => {
-    if (payload.taskId) {
-      refreshTaskRef(payload.taskId);
+    if (payload.taskId) refreshTaskRef(payload.taskId);
+
+    // Auto-append only on transitions absent → present in the cache.
+    // Without this, time-tracking ticks (and every other ANY_TASK_UPDATE
+    // event for an existing task in this context) would re-insert chips
+    // the user had deliberately removed from the doc.
+    if (payload.task && payload.taskId) {
+      const wasKnown = lastSeenTaskIds.has(payload.taskId);
+      const isKnown = taskCache.has(payload.taskId);
+      const isNewlyArrived = !wasKnown && isKnown;
+      // Refresh the snapshot regardless so later events compute correctly.
+      lastSeenTaskIds = new Set(taskCache.keys());
+      if (!isNewlyArrived) return;
+      const inProject =
+        ctxSnapshot.type === 'PROJECT' && payload.task.projectId === ctxSnapshot.id;
+      const inToday =
+        ctxSnapshot.id === 'TODAY' &&
+        (payload.task.tagIds?.includes('TODAY') ||
+          !!payload.task.dueDay ||
+          !!payload.task.dueWithTime);
+      if (inProject || inToday) appendMissingTask(payload.taskId);
+    } else {
+      // Deletion or non-payload event — still keep the snapshot fresh so
+      // we don't treat a re-arrival after deletion as the "same" task.
+      lastSeenTaskIds = new Set(taskCache.keys());
     }
   });
-  if (payload.task && payload.taskId) {
-    const inProject =
-      currentCtx.type === 'PROJECT' && payload.task.projectId === currentCtx.id;
-    const inToday =
-      currentCtx.id === 'TODAY' &&
-      (payload.task.tagIds?.includes('TODAY') ||
-        !!payload.task.dueDay ||
-        !!payload.task.dueWithTime);
-    if (inProject || inToday) appendMissingTask(payload.taskId);
-  }
 };
 
 /* -------------------------------------------------------------------------- */
@@ -1286,8 +1362,20 @@ const validInsertRange = (draggingPos: number): { min: number; max: number } | n
   const doc = editor.state.doc;
   const dragNode = doc.nodeAt(draggingPos);
   if (!dragNode || dragNode.type.name !== 'subTaskRef') return null;
-  const dragIdx = doc.resolve(draggingPos).index(0);
-  // Find owning parent: nearest earlier taskRef, walking past sibling subtasks.
+  // Resolve the dragged node's index via manual iteration (same reason as
+  // findParentTaskIdBefore — robust regardless of position-resolve corner
+  // cases).
+  let dragIdx = -1;
+  let cursor = 0;
+  for (let i = 0; i < doc.childCount; i++) {
+    if (cursor === draggingPos) {
+      dragIdx = i;
+      break;
+    }
+    cursor += doc.child(i).nodeSize;
+  }
+  if (dragIdx < 0) return null;
+  // Owning parent: nearest earlier taskRef, walking past sibling subtasks.
   let parentIdx = -1;
   for (let i = dragIdx - 1; i >= 0; i--) {
     const c = doc.child(i);

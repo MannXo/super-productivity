@@ -192,20 +192,26 @@ describe('PluginBridgeService.workContext — header buttons + embed slot', () =
       ).toThrowError(/non-empty showFor/);
     });
 
-    it('skips registering a duplicate label from the same plugin', () => {
+    it('replaces an existing (pluginId, label) entry on re-registration', () => {
+      // Iframe reloads produce a new onClick pointing at a new Window. The
+      // bridge must swap the entry so clicks reach the live iframe.
       const { service } = setup();
       const api = service.createBoundMethods(PLUGIN_A, manifest(PLUGIN_A));
+      const first = jasmine.createSpy('first');
+      const second = jasmine.createSpy('second');
       api.registerWorkContextHeaderButton({
         label: 'Dup',
-        onClick: () => {},
+        onClick: first,
         showFor: ['PROJECT'],
       });
       api.registerWorkContextHeaderButton({
         label: 'Dup',
-        onClick: () => {},
+        onClick: second,
         showFor: ['PROJECT'],
       });
-      expect(service.workContextHeaderButtons().length).toBe(1);
+      const btns = service.workContextHeaderButtons();
+      expect(btns.length).toBe(1);
+      expect(btns[0].onClick).toBe(second);
     });
   });
 
