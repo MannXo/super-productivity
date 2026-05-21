@@ -188,10 +188,13 @@ export class BackupService {
       backupSucceeded = false;
     }
 
-    // 2. Clear all old operations to prevent IndexedDB bloat
-    if (backupSucceeded) {
-      OpLog.normal('BackupService: Clearing old operations before import...');
-      await this._opLogStore.clearAllOperations();
+    // Skip the atomic destructive replacement if the import-backup write failed —
+    // we don't want to overwrite the user's local state without a recovery point.
+    if (!backupSucceeded) {
+      OpLog.warn(
+        'BackupService: Pre-import backup failed; skipping destructive import to preserve local state.',
+      );
+      return;
     }
 
     // Generate new client ID for both paths - imports are a fresh start
@@ -218,17 +221,15 @@ export class BackupService {
       syncImportReason: 'BACKUP_RESTORE',
     };
 
-    await this._opLogStore.append(op, 'local');
-    const lastSeq = await this._opLogStore.getLastSeq();
-
-    // Update vector clock store (append() doesn't do this, unlike appendWithVectorClockUpdate)
-    await this._opLogStore.setVectorClock(newClock);
-
-    await this._opLogStore.saveStateCache({
-      state: importedData,
-      lastAppliedOpSeq: lastSeq,
-      vectorClock: newClock,
-      compactedAt: Date.now(),
+    // Issue #7709: replace OPS + state_cache + vector_clock atomically so an
+    // interrupt during backup-restore can't leave the device in the
+    // `isWhollyFreshClient + meaningful store data` state that triggers the
+    // multi-device data-loss chain.
+    OpLog.normal('BackupService: Replacing op-log + state cache atomically');
+    await this._opLogStore.runDestructiveStateReplacement({
+      syncImportOp: op,
+      newVectorClock: newClock,
+      newState: importedData,
       schemaVersion: CURRENT_SCHEMA_VERSION,
     });
 

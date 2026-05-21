@@ -8,7 +8,7 @@ import { ClientIdService } from '../../core/util/client-id.service';
 import { ArchiveDbAdapter } from '../../core/persistence/archive-db-adapter.service';
 import { ArchiveModel } from '../../features/archive/archive.model';
 import { loadAllData } from '../../root-store/meta/load-all-data.action';
-import { OpType, Operation } from '../core/operation.types';
+import { OpType } from '../core/operation.types';
 
 describe('BackupService', () => {
   let service: BackupService;
@@ -102,11 +102,7 @@ describe('BackupService', () => {
     mockOpLogStore = jasmine.createSpyObj('OperationLogStoreService', [
       'loadStateCache',
       'saveImportBackup',
-      'clearAllOperations',
-      'append',
-      'getLastSeq',
-      'saveStateCache',
-      'setVectorClock',
+      'runDestructiveStateReplacement',
     ]);
     mockClientIdService = jasmine.createSpyObj('ClientIdService', [
       'generateNewClientId',
@@ -118,11 +114,7 @@ describe('BackupService', () => {
 
     // Default mock returns
     mockOpLogStore.loadStateCache.and.returnValue(Promise.resolve(null));
-    mockOpLogStore.clearAllOperations.and.returnValue(Promise.resolve());
-    mockOpLogStore.append.and.returnValue(Promise.resolve(1));
-    mockOpLogStore.getLastSeq.and.returnValue(Promise.resolve(1));
-    mockOpLogStore.saveStateCache.and.returnValue(Promise.resolve());
-    mockOpLogStore.setVectorClock.and.resolveTo();
+    mockOpLogStore.runDestructiveStateReplacement.and.resolveTo(1);
     mockClientIdService.generateNewClientId.and.resolveTo('newClientId');
     mockArchiveDbAdapter.saveArchiveYoung.and.returnValue(Promise.resolve());
     mockArchiveDbAdapter.saveArchiveOld.and.returnValue(Promise.resolve());
@@ -165,8 +157,8 @@ describe('BackupService', () => {
 
       await service.importCompleteBackup(backupData as any, true, true);
 
-      expect(mockOpLogStore.append).toHaveBeenCalled();
-      expect(mockOpLogStore.saveStateCache).toHaveBeenCalled();
+      // Issue #7709: the destructive sequence is now a single atomic call.
+      expect(mockOpLogStore.runDestructiveStateReplacement).toHaveBeenCalledTimes(1);
     });
 
     it('should normalize invalid startOfNextDay config before persisting import', async () => {
@@ -179,13 +171,14 @@ describe('BackupService', () => {
 
       await service.importCompleteBackup(backupData as any, true, true);
 
-      const appendedOp = mockOpLogStore.append.calls.mostRecent().args[0] as Operation;
-      const appendedPayload = appendedOp.payload as any;
+      const args = mockOpLogStore.runDestructiveStateReplacement.calls.mostRecent()
+        .args[0] as Parameters<typeof mockOpLogStore.runDestructiveStateReplacement>[0];
+
+      const appendedPayload = args.syncImportOp.payload as any;
       expect(appendedPayload.globalConfig.misc.startOfNextDay).toBe(4);
       expect(appendedPayload.globalConfig.misc.startOfNextDayTime).toBe('04:00');
 
-      const savedState = mockOpLogStore.saveStateCache.calls.mostRecent().args[0]
-        .state as any;
+      const savedState = args.newState as any;
       expect(savedState.globalConfig.misc.startOfNextDay).toBe(4);
       expect(savedState.globalConfig.misc.startOfNextDayTime).toBe('04:00');
     });
@@ -290,25 +283,25 @@ describe('BackupService', () => {
       expect(calledWith.task.ids).toContain('wrapped-task');
     });
 
-    it('should call setVectorClock with fresh clock', async () => {
+    it('should pass a fresh { [clientId]: 1 } vector clock to the atomic helper', async () => {
       const backupData = createMinimalValidBackup();
 
       await service.importCompleteBackup(backupData as any, true, true);
 
-      expect(mockOpLogStore.setVectorClock).toHaveBeenCalled();
-      const calledClock = mockOpLogStore.setVectorClock.calls.mostRecent().args[0];
-      expect(calledClock).toEqual({ newClientId: 1 });
+      const args = mockOpLogStore.runDestructiveStateReplacement.calls.mostRecent()
+        .args[0] as Parameters<typeof mockOpLogStore.runDestructiveStateReplacement>[0];
+      expect(args.newVectorClock).toEqual({ newClientId: 1 });
     });
 
-    it('should call setVectorClock with fresh clock on import', async () => {
+    it('should pass a fresh clock to the atomic helper on force-import', async () => {
       mockClientIdService.generateNewClientId.and.resolveTo('newForceClient');
       const backupData = createMinimalValidBackup();
 
       await service.importCompleteBackup(backupData as any, true, true, true);
 
-      expect(mockOpLogStore.setVectorClock).toHaveBeenCalled();
-      const calledClock = mockOpLogStore.setVectorClock.calls.mostRecent().args[0];
-      expect(calledClock).toEqual({ newForceClient: 1 });
+      const args = mockOpLogStore.runDestructiveStateReplacement.calls.mostRecent()
+        .args[0] as Parameters<typeof mockOpLogStore.runDestructiveStateReplacement>[0];
+      expect(args.newVectorClock).toEqual({ newForceClient: 1 });
     });
 
     /**
@@ -325,13 +318,13 @@ describe('BackupService', () => {
 
       await service.importCompleteBackup(backupData as any, true, true);
 
-      expect(mockOpLogStore.append).toHaveBeenCalled();
-      const appendedOp = mockOpLogStore.append.calls.mostRecent().args[0] as Operation;
+      const args = mockOpLogStore.runDestructiveStateReplacement.calls.mostRecent()
+        .args[0] as Parameters<typeof mockOpLogStore.runDestructiveStateReplacement>[0];
 
       // CRITICAL: Must use BackupImport so server receives reason='recovery'
-      expect(appendedOp.opType).toBe(OpType.BackupImport);
+      expect(args.syncImportOp.opType).toBe(OpType.BackupImport);
       // Verify it's NOT using SyncImport (which would cause 409 errors)
-      expect(appendedOp.opType).not.toBe(OpType.SyncImport);
+      expect(args.syncImportOp.opType).not.toBe(OpType.SyncImport);
     });
 
     it('should produce fresh { [clientId]: 1 } clock on import', async () => {
@@ -340,8 +333,9 @@ describe('BackupService', () => {
 
       await service.importCompleteBackup(backupData as any, true, true, true);
 
-      const appendedOp = mockOpLogStore.append.calls.mostRecent().args[0] as Operation;
-      expect(appendedOp.vectorClock).toEqual({ newForceClient: 1 });
+      const args = mockOpLogStore.runDestructiveStateReplacement.calls.mostRecent()
+        .args[0] as Parameters<typeof mockOpLogStore.runDestructiveStateReplacement>[0];
+      expect(args.syncImportOp.vectorClock).toEqual({ newForceClient: 1 });
     });
   });
 });

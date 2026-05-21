@@ -146,27 +146,20 @@ export class CleanSlateService {
       clientId: newClientId,
     });
 
-    // 6. Clear all local operations (fresh start)
-    OpLog.normal('[CleanSlate] Clearing all local operations');
-    await this.opLogStore.clearAllOperations();
-
-    // 7. Store the new SYNC_IMPORT locally (not synced yet)
-    await this.opLogStore.append(syncImportOp);
-    OpLog.normal('[CleanSlate] Stored SYNC_IMPORT operation locally');
-
-    // 8. Update vector clock in dedicated store
-    await this.opLogStore.setVectorClock(newVectorClock);
-    OpLog.normal('[CleanSlate] Updated vector clock', { vectorClock: newVectorClock });
-
-    // 9. Save new snapshot with the clean state
-    await this.opLogStore.saveStateCache({
-      state: currentState,
-      lastAppliedOpSeq: 0, // Fresh start - no ops applied yet
-      vectorClock: newVectorClock,
-      compactedAt: Date.now(),
+    // 6-9. Atomically replace OPS + state_cache + vector_clock. Issue #7709:
+    // before this was a sequence of independent transactions, and an interrupt
+    // between `clearAllOperations()` and `saveStateCache(...)` on a never-
+    // compacted device left `isWhollyFreshClient()===true` with meaningful
+    // store data — the precondition for the multi-device data-loss chain.
+    // `runDestructiveStateReplacement` makes the destructive sequence either
+    // commit fully or leave the prior state intact.
+    OpLog.normal('[CleanSlate] Replacing op-log + state cache atomically');
+    await this.opLogStore.runDestructiveStateReplacement({
+      syncImportOp,
+      newVectorClock,
+      newState: currentState,
       schemaVersion: CURRENT_SCHEMA_VERSION,
     });
-    OpLog.normal('[CleanSlate] Saved new snapshot');
 
     OpLog.normal('[CleanSlate] Clean slate completed successfully', {
       syncImportId: syncImportOp.id,

@@ -38,6 +38,17 @@ export const SINGLETON_KEY = 'current' as const;
 /** Backup key for state cache backup */
 export const BACKUP_KEY = 'backup' as const;
 
+/**
+ * Staging key for atomic destructive state replacement.
+ *
+ * Used by `OperationLogStoreService.runDestructiveStateReplacement()` to write
+ * the large new-state payload outside the destructive multi-store transaction.
+ * The transaction then promotes the staged row to SINGLETON_KEY and deletes
+ * this row. If the transaction aborts, the staged row is left behind and
+ * cleaned up on next init.
+ */
+export const STATE_CACHE_STAGING_KEY = 'staging' as const;
+
 /** Index names for ops object store */
 export const OPS_INDEXES = {
   BY_ID: 'byId' as const,

@@ -22,6 +22,7 @@ import {
   STORE_NAMES,
   SINGLETON_KEY,
   BACKUP_KEY,
+  STATE_CACHE_STAGING_KEY,
   OPS_INDEXES,
   ArchiveStoreEntry,
   ProfileDataStoreEntry,
@@ -197,6 +198,23 @@ export class OperationLogStoreService implements RemoteOperationApplyStorePort<O
       this._initPromise = undefined;
     });
     this._db = db;
+
+    // Reconcile orphaned state_cache staging row. A staging row that survived
+    // means runDestructiveStateReplacement's destructive transaction never
+    // committed; the singleton row is the authoritative state. Delete the
+    // staging row so the next destructive replacement starts clean.
+    try {
+      const staging = await db.get(STORE_NAMES.STATE_CACHE, STATE_CACHE_STAGING_KEY);
+      if (staging) {
+        await db.delete(STORE_NAMES.STATE_CACHE, STATE_CACHE_STAGING_KEY);
+        Log.warn(
+          '[OpLogStore] Cleaned up orphaned state_cache staging row from a previous interrupted destructive replacement.',
+        );
+      }
+    } catch (e) {
+      // Non-fatal: an init that can't read state_cache will fail elsewhere too.
+      Log.warn('[OpLogStore] Staging-row reconciliation skipped (read failed):', e);
+    }
   }
 
   /**
@@ -1550,6 +1568,134 @@ export class OperationLogStoreService implements RemoteOperationApplyStorePort<O
         this._appliedOpIdsCache = null;
         this._cacheLastSeq = 0;
         throw new Error(DUPLICATE_OPERATION_ERROR_MSG);
+      }
+      if (e instanceof DOMException && e.name === 'QuotaExceededError') {
+        throw new StorageQuotaExceededError();
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Atomically replace local op-log + state_cache + vector_clock with a new
+   * full-state baseline. Used by destructive flows (clean-slate, backup-restore)
+   * to fix issue #7709.
+   *
+   * Before this method existed, the destructive sequence was four independent
+   * IndexedDB transactions: clearAllOperations → append(syncImportOp) →
+   * setVectorClock → saveStateCache. An interrupt between steps could leave
+   * OPS empty and state_cache stale/missing — which on a low-activity device
+   * (never reached COMPACTION_THRESHOLD) routed the next launch through the
+   * `isWhollyFreshClient + meaningful store data` conflict-dialog branch and
+   * caused the user-reported multi-device data-loss chain.
+   *
+   * ## Snapshot-then-swap (not single large multi-store tx)
+   *
+   * 1. Stage the new `state` payload to a separate row keyed by
+   *    `STATE_CACHE_STAGING_KEY`. This single-store write can carry the
+   *    multi-MB payload without keeping a multi-store transaction open.
+   * 2. Verify the staged row with a round-trip read.
+   * 3. Open one short multi-store readwrite transaction (OPS + STATE_CACHE +
+   *    VECTOR_CLOCK) that does only small writes: clear OPS, append the
+   *    SYNC_IMPORT entry, write the vector clock, copy staging → singleton,
+   *    delete staging.
+   *
+   * If any step throws, the IndexedDB transaction aborts and no committed
+   * change to OPS / STATE_CACHE singleton / VECTOR_CLOCK survives. The next
+   * `init()` removes any orphaned staging row.
+   *
+   * @returns The seq of the appended SYNC_IMPORT/BACKUP_IMPORT op.
+   */
+  async runDestructiveStateReplacement(opts: {
+    syncImportOp: Operation;
+    newVectorClock: VectorClock;
+    newState: unknown;
+    schemaVersion: number;
+    snapshotEntityKeys?: string[];
+  }): Promise<number> {
+    await this._ensureInit();
+
+    // 1. Stage the new state cache (large payload, outside the destructive tx).
+    await this.db.put(STORE_NAMES.STATE_CACHE, {
+      id: STATE_CACHE_STAGING_KEY,
+      state: opts.newState,
+      lastAppliedOpSeq: 0,
+      vectorClock: opts.newVectorClock,
+      compactedAt: Date.now(),
+      schemaVersion: opts.schemaVersion,
+      snapshotEntityKeys: opts.snapshotEntityKeys,
+    });
+
+    // 2. Round-trip verify. If the staged write didn't land, abort before
+    // we touch OPS — the prior state is still intact at this point.
+    const staged = await this.db.get(STORE_NAMES.STATE_CACHE, STATE_CACHE_STAGING_KEY);
+    if (!staged || staged.state === null || staged.state === undefined) {
+      throw new Error(
+        '[OpLogStore] runDestructiveStateReplacement: stage write failed verification',
+      );
+    }
+
+    // 3. Destructive multi-store transaction. Small writes only:
+    // clear OPS, add the SYNC_IMPORT entry, write the vector clock,
+    // promote staging row to the singleton, delete the staging row.
+    const tx = this.db.transaction(
+      [STORE_NAMES.OPS, STORE_NAMES.STATE_CACHE, STORE_NAMES.VECTOR_CLOCK],
+      'readwrite',
+    );
+
+    try {
+      const opsStore = tx.objectStore(STORE_NAMES.OPS);
+      const stateCacheStore = tx.objectStore(STORE_NAMES.STATE_CACHE);
+      const vcStore = tx.objectStore(STORE_NAMES.VECTOR_CLOCK);
+
+      await opsStore.clear();
+
+      const compactOp = encodeOperation(opts.syncImportOp);
+      const entry: Omit<StoredOperationLogEntry, 'seq'> = {
+        op: compactOp,
+        appliedAt: Date.now(),
+        source: 'local',
+        syncedAt: undefined,
+        applicationStatus: undefined,
+      };
+      const seq = (await opsStore.add(entry as StoredOperationLogEntry)) as number;
+
+      await vcStore.put(
+        { clock: opts.newVectorClock, lastUpdate: Date.now() },
+        SINGLETON_KEY,
+      );
+
+      await stateCacheStore.put({ ...staged, id: SINGLETON_KEY });
+      await stateCacheStore.delete(STATE_CACHE_STAGING_KEY);
+
+      await tx.done;
+
+      // Cache invalidation.
+      this._appliedOpIdsCache = null;
+      this._cacheLastSeq = 0;
+      this._invalidateUnsyncedCache();
+      this._vectorClockCache = opts.newVectorClock;
+
+      return seq;
+    } catch (e) {
+      // CRITICAL: explicitly abort the IDB tx so any already-queued writes
+      // (like the opsStore.clear() above) are rolled back. Without this,
+      // a JS-level throw between IDB requests can let the tx auto-commit
+      // partial state — defeating the whole atomicity story this method
+      // exists for.
+      try {
+        tx.abort();
+      } catch {
+        // Already aborted/committed — IDB throws InvalidStateError; nothing to do.
+      }
+
+      // OPS/STATE_CACHE singleton/VECTOR_CLOCK are now unchanged.
+      // The staging row may persist — best-effort cleanup; the next init()
+      // will sweep it if this fails.
+      try {
+        await this.db.delete(STORE_NAMES.STATE_CACHE, STATE_CACHE_STAGING_KEY);
+      } catch {
+        // Swallow — boot-time reconciliation will handle it.
       }
       if (e instanceof DOMException && e.name === 'QuotaExceededError') {
         throw new StorageQuotaExceededError();

@@ -7,20 +7,25 @@ import { PreMigrationBackupService } from '../../clean-slate/pre-migration-backu
 import { SyncLocalStateService } from '../../sync/sync-local-state.service';
 import { TranslateService } from '@ngx-translate/core';
 import { CURRENT_SCHEMA_VERSION } from '../../persistence/schema-migration.service';
+import { Operation } from '../../core/operation.types';
 
 /**
- * Integration tests for issue #7709 — `createCleanSlate` interrupted mid-sequence.
+ * Integration tests for issue #7709 — `createCleanSlate` / `BackupService` import
+ * interrupted mid-sequence.
  *
  * The reported bug requires that on a surviving device, `isWhollyFreshClient()`
  * returns true (i.e. `state_cache===null && lastSeq===0`) while NgRx in-memory
- * state still has meaningful data. This file proves that an interrupt between
- * `clearAllOperations()` and `saveStateCache(...)` produces exactly that
- * post-condition on a low-activity device (no prior `state_cache`).
+ * state still has meaningful data. The pre-fix code reached that state by an
+ * interrupt between `clearAllOperations()` and `saveStateCache(...)`.
  *
- * Tests use real IndexedDB; the destructive sequence is interrupted by
- * making the next op-log call throw.
+ * After PR-A, `runDestructiveStateReplacement` makes the destructive sequence
+ * either commit fully or leave the prior state intact. The tests below
+ * exercise the fix by injecting failures inside the helper's destructive tx
+ * and asserting that the device's prior state is preserved.
+ *
+ * Tests use real IndexedDB.
  */
-describe('CleanSlate interrupt (issue #7709 precondition)', () => {
+describe('CleanSlate / Backup interrupt (issue #7709 regression)', () => {
   let storeService: OperationLogStoreService;
   let syncLocalState: SyncLocalStateService;
   let cleanSlate: CleanSlateService;
@@ -82,12 +87,10 @@ describe('CleanSlate interrupt (issue #7709 precondition)', () => {
 
   describe('baseline (no interrupt)', () => {
     it('completes the destructive sequence and leaves a populated state_cache', async () => {
-      // Precondition: nothing exists yet.
       expect(await syncLocalState.isWhollyFreshClient()).toBe(true);
 
       await cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED');
 
-      // Post: SYNC_IMPORT op stored AND state_cache populated.
       expect(await storeService.getLastSeq()).toBeGreaterThan(0);
       const cache = await storeService.loadStateCache();
       expect(cache).not.toBeNull();
@@ -96,11 +99,11 @@ describe('CleanSlate interrupt (issue #7709 precondition)', () => {
     });
   });
 
-  describe('interrupt between clearAllOperations() and append() — the reported chain', () => {
-    it('leaves OPS empty AND state_cache null when device had never compacted', async () => {
-      // Low-activity device: ops exist but never reached COMPACTION_THRESHOLD = 500,
-      // so state_cache was never written. Seed 3 user ops directly via append.
-      const userOps = Array.from({ length: 3 }, (_, i) => ({
+  describe('runDestructiveStateReplacement atomicity', () => {
+    it('preserves OPS, state_cache, and vector_clock when the destructive tx fails', async () => {
+      // Seed the device: a few ops, a populated state_cache (post-compaction),
+      // and a vector clock. This is the "normal-use" device state.
+      const userOps: Operation[] = Array.from({ length: 3 }, (_, i) => ({
         id: `op-${i}`,
         actionType: 'TASK_ADD' as any,
         opType: 'Create' as any,
@@ -113,109 +116,165 @@ describe('CleanSlate interrupt (issue #7709 precondition)', () => {
         schemaVersion: CURRENT_SCHEMA_VERSION,
       }));
       for (const op of userOps) {
-        await storeService.append(op as any, 'local');
+        await storeService.append(op, 'local');
       }
-      // State at this point: lastSeq > 0, state_cache===null (never compacted).
-      // We don't assert exact seq because IDB autoincrement persists across the
-      // beforeEach _clearAllDataForTesting (clear() does not reset the key generator).
-      const seqBefore = await storeService.getLastSeq();
-      expect(seqBefore).toBeGreaterThan(0);
-      expect(await storeService.loadStateCache()).toBeNull();
-      expect(await syncLocalState.isWhollyFreshClient()).toBe(false);
-
-      // Inject the interrupt: clearAllOperations succeeds, then append throws.
-      // This is the window between clean-slate.service.ts:151 and :154.
-      const realAppend = storeService.append.bind(storeService);
-      let appendCalls = 0;
-      spyOn(storeService, 'append').and.callFake(async () => {
-        appendCalls++;
-        // The first append after clearAllOperations() is the SYNC_IMPORT op.
-        // Throw to simulate a crash/tab-close at exactly that moment.
-        throw new Error('Simulated interrupt: tab closed mid-clean-slate');
-      });
-
-      await expectAsync(
-        cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED'),
-      ).toBeRejected();
-
-      expect(appendCalls).toBe(1);
-
-      // POST-CONDITION: this is the precondition for issue #7709's chain.
-      // The device now reads as a fresh client even though NgRx (mocked above)
-      // still has meaningful state.
-      expect(await storeService.getLastSeq()).toBe(0); // ops were cleared, SYNC_IMPORT never landed
-      expect(await storeService.loadStateCache()).toBeNull(); // never reached step 4
-      expect(await syncLocalState.isWhollyFreshClient()).toBe(true);
-      // And meaningful store data is still there (from the mock):
-      expect(syncLocalState.hasMeaningfulStoreData()).toBe(true);
-
-      // This combination is what `operation-log-sync.service.ts:599-606`
-      // detects as the conflict-throw branch. The interrupt at append() is
-      // sufficient to reach `isWhollyFreshClient + hasMeaningfulStoreData`.
-
-      // Restore the spy for any later test sharing module state.
-      (storeService.append as any).and.callFake(realAppend);
-    });
-  });
-
-  describe('interrupt between append() and saveStateCache()', () => {
-    it('leaves lastSeq>0 BUT state_cache still null — not the #7709 chain, but still corrupt', async () => {
-      // Same precondition: never compacted, so state_cache===null.
-      // No prior ops this time — start clean.
-      expect(await storeService.loadStateCache()).toBeNull();
-
-      // Interrupt: clear and append succeed, setVectorClock throws.
-      spyOn(storeService, 'setVectorClock').and.callFake(async () => {
-        throw new Error('Simulated interrupt: tab closed before vector-clock write');
-      });
-
-      await expectAsync(
-        cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED'),
-      ).toBeRejected();
-
-      // POST: SYNC_IMPORT op landed (lastSeq>0), but state_cache still null
-      // because setVectorClock errored before saveStateCache (line 162) ran.
-      expect(await storeService.getLastSeq()).toBeGreaterThan(0);
-      expect(await storeService.loadStateCache()).toBeNull();
-
-      // isWhollyFreshClient is FALSE here because lastSeq>0. So this interrupt
-      // pattern does NOT route through the #7709 conflict dialog — but the
-      // device's state_cache is still missing, which is a related corruption.
-      expect(await syncLocalState.isWhollyFreshClient()).toBe(false);
-    });
-  });
-
-  describe('on a device that HAD previously compacted (state_cache exists)', () => {
-    it('preserves state_cache when interrupted at append()', async () => {
-      // Simulate a prior compaction: state_cache is populated.
       await storeService.saveStateCache({
         state: { sentinel: 'prior-state' } as any,
         lastAppliedOpSeq: 0,
-        vectorClock: { cPrior: 5 },
+        vectorClock: { cPrior: 3 },
         compactedAt: Date.now(),
         schemaVersion: CURRENT_SCHEMA_VERSION,
       });
-      expect(await storeService.loadStateCache()).not.toBeNull();
-      expect(await syncLocalState.isWhollyFreshClient()).toBe(false);
+      await storeService.setVectorClock({ cPrior: 3 });
 
-      // Inject interrupt at append.
-      spyOn(storeService, 'append').and.callFake(async () => {
-        throw new Error('Simulated interrupt');
-      });
+      const seqBefore = await storeService.getLastSeq();
+      const cacheBefore = await storeService.loadStateCache();
+      const clockBefore = await storeService.getVectorClock();
+
+      // Inject a failure inside the destructive tx: spy on db.transaction to
+      // return a tx whose opsStore.add throws. The helper's catch block must
+      // call tx.abort() to roll back the queued opsStore.clear().
+      const realTransaction = (storeService as any).db.transaction.bind(
+        (storeService as any).db,
+      );
+      spyOn((storeService as any).db, 'transaction').and.callFake(
+        (stores: any, mode: any) => {
+          const tx = realTransaction(stores, mode);
+          if (Array.isArray(stores) && stores.includes('ops')) {
+            const opsStore = tx.objectStore('ops');
+            opsStore.add = async () => {
+              throw new Error('Simulated interrupt: append failed inside destructive tx');
+            };
+          }
+          return tx;
+        },
+      );
 
       await expectAsync(
         cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED'),
       ).toBeRejected();
 
-      // Post: OPS was cleared, but the prior state_cache is STILL there
-      // (createCleanSlate never re-saved it). So isWhollyFreshClient is FALSE.
-      // → A previously-compacted device is NOT vulnerable to the #7709 chain
-      //   via this interrupt path, because state_cache survives.
-      expect(await storeService.getLastSeq()).toBe(0);
-      const cache = await storeService.loadStateCache();
-      expect(cache).not.toBeNull();
-      expect((cache!.state as any).sentinel).toBe('prior-state');
+      // POST: device is exactly as before the destructive call.
+      expect(await storeService.getLastSeq()).toBe(seqBefore);
+      const cacheAfter = await storeService.loadStateCache();
+      expect(cacheAfter).not.toBeNull();
+      expect((cacheAfter!.state as any).sentinel).toBe('prior-state');
+      expect(cacheAfter!.vectorClock).toEqual(cacheBefore!.vectorClock);
+      expect(await storeService.getVectorClock()).toEqual(clockBefore);
+    });
+
+    it('leaves no orphaned staging row after a failed destructive tx', async () => {
+      // Make the destructive tx's opsStore.clear() abort by closing the db
+      // connection mid-flight. The IDB tx will reject; the helper's catch
+      // path attempts a best-effort staging-row cleanup.
+      const realTransaction = (storeService as any).db.transaction.bind(
+        (storeService as any).db,
+      );
+      spyOn((storeService as any).db, 'transaction').and.callFake(
+        (stores: any, mode: any) => {
+          const tx = realTransaction(stores, mode);
+          // Force the tx to abort by making its opsStore.clear reject.
+          if (Array.isArray(stores) && stores.includes('ops')) {
+            const opsStore = tx.objectStore('ops');
+            const realClear = opsStore.clear.bind(opsStore);
+            opsStore.clear = async () => {
+              await realClear();
+              throw new Error('Simulated interrupt: destructive tx aborted');
+            };
+          }
+          return tx;
+        },
+      );
+
+      await expectAsync(
+        cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED'),
+      ).toBeRejected();
+
+      // The best-effort cleanup in the catch path should have removed the staging row.
+      // (If it didn't, the boot reconciliation in init() would on next launch.)
+      const staging = await (storeService as any).db.get('state_cache', 'staging');
+      expect(staging).toBeUndefined();
+    });
+  });
+
+  describe('after fix: createCleanSlate interrupt no longer produces #7709 precondition', () => {
+    it('on a never-compacted device, an interrupt leaves prior op-log intact', async () => {
+      // Low-activity device: 3 ops, no state_cache (never compacted).
+      const userOps: Operation[] = Array.from({ length: 3 }, (_, i) => ({
+        id: `op-${i}`,
+        actionType: 'TASK_ADD' as any,
+        opType: 'Create' as any,
+        entityType: 'TASK' as any,
+        entityId: `t${i}`,
+        payload: { id: `t${i}` },
+        clientId: 'cPrior',
+        vectorClock: { cPrior: i + 1 },
+        timestamp: Date.now() + i,
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+      }));
+      for (const op of userOps) {
+        await storeService.append(op, 'local');
+      }
+      expect(await storeService.loadStateCache()).toBeNull();
+      const seqBefore = await storeService.getLastSeq();
+
+      // Inject a failure into the destructive tx (force opsStore.add to throw).
+      const realTransaction = (storeService as any).db.transaction.bind(
+        (storeService as any).db,
+      );
+      spyOn((storeService as any).db, 'transaction').and.callFake(
+        (stores: any, mode: any) => {
+          const tx = realTransaction(stores, mode);
+          if (Array.isArray(stores) && stores.includes('ops')) {
+            const opsStore = tx.objectStore('ops');
+            opsStore.add = async () => {
+              throw new Error('Simulated interrupt: append failed inside destructive tx');
+            };
+          }
+          return tx;
+        },
+      );
+
+      await expectAsync(
+        cleanSlate.createCleanSlate('ENCRYPTION_CHANGE', 'PASSWORD_CHANGED'),
+      ).toBeRejected();
+
+      // POST-FIX behavior: device retains its prior ops and state_cache-null status.
+      // Crucially, lastSeq is UNCHANGED — the IDB transaction's `clear()` was
+      // rolled back when the subsequent `add` threw.
+      // Without the atomicity fix, lastSeq would be 0 here and the next launch
+      // would route through `isWhollyFreshClient + meaningful store data` and
+      // throw `LocalDataConflictError(0, {})` — the #7709 chain.
+      expect(await storeService.getLastSeq()).toBe(seqBefore);
+      expect(await storeService.loadStateCache()).toBeNull();
+      expect(syncLocalState.hasMeaningfulStoreData()).toBe(true);
+      // The device is NOT classified as wholly fresh — even though state_cache
+      // was missing before the destructive call too, the surviving op-log keeps
+      // `lastSeq > 0` so `isWhollyFreshClient()` is false.
       expect(await syncLocalState.isWhollyFreshClient()).toBe(false);
+    });
+  });
+
+  describe('boot-time staging-row reconciliation', () => {
+    it('cleans up an orphaned staging row on next init()', async () => {
+      // Simulate a previous run that crashed leaving a staging row behind.
+      await (storeService as any).db.put('state_cache', {
+        id: 'staging',
+        state: { ghost: true },
+        lastAppliedOpSeq: 0,
+        vectorClock: {},
+        compactedAt: Date.now(),
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+      });
+      expect(await (storeService as any).db.get('state_cache', 'staging')).toBeDefined();
+
+      // Force a re-init by tearing down and reconstructing the service via TestBed.
+      // (The simpler path: invoke the init() method again to trigger the
+      // reconciliation block.)
+      await storeService.init();
+
+      const staging = await (storeService as any).db.get('state_cache', 'staging');
+      expect(staging).toBeUndefined();
     });
   });
 });
