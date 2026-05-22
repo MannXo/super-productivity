@@ -376,5 +376,24 @@ describe('PluginBridgeService.workContext — header buttons + embed slot', () =
       result!.taskIds.push('task-3');
       expect(liveTaskIds).toEqual(['task-1', 'task-2']);
     });
+
+    it("reports type 'TODAY' for the Today context", async () => {
+      // The Today tag is a TAG internally but is surfaced to plugins as its
+      // own type, matching registerWorkContextHeaderButton's showFor values.
+      const { service } = setup(todayCtx);
+
+      const result = await service.getActiveWorkContext();
+
+      expect(result?.id).toBe('TODAY');
+      expect(result?.type).toBe('TODAY');
+    });
+
+    it("reports type 'PROJECT' for a project context", async () => {
+      const { service } = setup(projectCtx);
+
+      const result = await service.getActiveWorkContext();
+
+      expect(result?.type).toBe('PROJECT');
+    });
   });
 });

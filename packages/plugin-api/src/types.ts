@@ -200,7 +200,12 @@ export interface ProjectListUpdatePayload {
  */
 export interface ActiveWorkContext {
   id: string;
-  type: 'PROJECT' | 'TAG';
+  /**
+   * `'TODAY'` is reported for the special Today tag (whose `id` is also
+   * `'TODAY'`); every other tag is `'TAG'`. This matches the vocabulary of
+   * {@link PluginWorkContextHeaderBtnCfg.showFor}.
+   */
+  type: 'PROJECT' | 'TAG' | 'TODAY';
   title: string;
   /**
    * An independent copy taken at emit time — safe to read, and mutating it
@@ -429,6 +434,11 @@ export interface PluginAPI {
    * Register a header button that is only visible when the active work
    * context matches one of the entries in `showFor`. The handler receives a
    * snapshot of the active context.
+   *
+   * Register this from your plugin's main script — not from an embedded
+   * `index.html` — so the button and its handler outlive any work-view embed
+   * the button toggles. A button registered from an embed iframe stops
+   * working once that embed is closed.
    */
   registerWorkContextHeaderButton(
     cfg: Omit<PluginWorkContextHeaderBtnCfg, 'pluginId'>,

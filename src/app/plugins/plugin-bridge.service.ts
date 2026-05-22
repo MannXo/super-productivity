@@ -20,6 +20,7 @@ import {
   ActiveWorkContext,
   Task,
 } from './plugin-api.model';
+import { toActiveWorkContext } from './util/active-work-context.util';
 
 import {
   BatchTaskCreate,
@@ -150,7 +151,7 @@ export class PluginBridgeService implements OnDestroy {
   // project data changes within the same context (e.g. a task is added).
   private readonly _activeWorkContextSig = toSignal(
     this._workContextService.activeWorkContext$.pipe(
-      distinctUntilChanged((a, b) => a.id === b.id && a.type === b.type),
+      distinctUntilChanged((a, b) => a?.id === b?.id && a?.type === b?.type),
     ),
     { initialValue: null },
   );
@@ -551,13 +552,7 @@ export class PluginBridgeService implements OnDestroy {
           timeout({ first: 10_000 }),
         ),
       );
-      return {
-        id: ctx.id,
-        type: ctx.type,
-        title: ctx.title,
-        // Copy: the plugin must not be able to mutate the store's array.
-        taskIds: [...ctx.taskIds],
-      };
+      return toActiveWorkContext(ctx);
     } catch {
       return null;
     }

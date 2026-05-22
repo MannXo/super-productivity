@@ -48,6 +48,7 @@ import { LOCAL_ACTIONS } from '../util/local-actions.token';
 import { PlannerActions } from '../features/planner/store/planner.actions';
 import { LanguageCode } from '../core/locale.constants';
 import { WorkContextService } from '../features/work-context/work-context.service';
+import { toActiveWorkContext } from './util/active-work-context.util';
 
 @Injectable()
 export class PluginHooksEffects {
@@ -335,15 +336,12 @@ export class PluginHooksEffects {
   workContextChange$ = createEffect(
     () =>
       this.workContextService.activeWorkContext$.pipe(
-        distinctUntilChanged((a, b) => a.id === b.id && a.type === b.type),
+        distinctUntilChanged((a, b) => a?.id === b?.id && a?.type === b?.type),
         tap((ctx) => {
-          this.pluginService.dispatchHook(PluginHooks.WORK_CONTEXT_CHANGE, {
-            id: ctx.id,
-            type: ctx.type,
-            title: ctx.title,
-            // Copy: the plugin must not be able to mutate the store's array.
-            taskIds: [...ctx.taskIds],
-          });
+          this.pluginService.dispatchHook(
+            PluginHooks.WORK_CONTEXT_CHANGE,
+            toActiveWorkContext(ctx),
+          );
         }),
       ),
     { dispatch: false },
