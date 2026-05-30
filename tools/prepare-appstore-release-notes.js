@@ -24,12 +24,14 @@ const outFile =
   path.join(ROOT_DIR, 'fastlane', 'appstore_metadata', locale, 'release_notes.txt');
 
 // GitHub-only footer lines that don't belong in an App Store "What's New".
+// Anchored to the start of the line so they can't swallow a legitimate content
+// line that merely mentions "download" (e.g. a fix about a download dialog).
 const FOOTER_PATTERNS = [
   /check the wiki/i,
-  /current downloads/i,
-  /download (links|options)/i,
-  /releases\/latest/i,
+  /^\s*for all current downloads/i,
   /^\s*for the latest version/i,
+  /^\s*(see|view|read) the (full )?changelog/i,
+  /releases\/latest\b/i,
   /^\s*visit:?\s*$/i,
   /^\s*https?:\/\/\S+\s*$/i,
 ];
@@ -42,9 +44,14 @@ const toPlainText = (markdown) =>
       line
         // headings: "## Features" -> "Features"
         .replace(/^#{1,6}\s*/, '')
-        // bold/italic markers
-        .replace(/\*\*(.*?)\*\*/g, '$1')
-        .replace(/(^|\s)[*_](\S.*?\S)[*_]/g, '$1$2')
+        // bold: "**text**" -> "text"
+        .replace(/\*\*(?=\S)([^*\n]+?)\*\*/g, '$1')
+        // italic "*text*" -> "text" (markers must hug non-space and be bounded
+        // by whitespace/edges, so stray asterisks like "*.md" or "a * b" survive)
+        .replace(/(^|\s)\*(?=\S)([^*\n]+?)\*(?=\s|$)/g, '$1$2')
+        // italic "_text_" -> "text" (intra-word underscores like snake_case
+        // are left untouched by the boundary requirements)
+        .replace(/(^|\s)_(?=\S)([^_\n]+?)_(?=\s|$)/g, '$1$2')
         // links: "[text](url)" -> "text"
         .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
         // list bullets: "- item" / "* item" -> "• item"
@@ -76,6 +83,5 @@ if (text.length > MAX_CHARS) {
   text = `${text.slice(0, MAX_CHARS - 1).trimEnd()}…`;
 }
 
-fs.mkdirSync(path.dirname(outFile), { recursive: true });
 fs.writeFileSync(outFile, `${text}\n`, 'utf8');
 console.log(`Wrote App Store release notes (${text.length} chars) to ${outFile}`);

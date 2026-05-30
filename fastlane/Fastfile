@@ -16,10 +16,15 @@
 # higher). A key with only the "Developer" role can upload/notarize but cannot
 # create a version or submit it for review.
 #
+# SECURITY: never enable verbose mode (--verbose / FASTLANE_VERBOSE / verbose:
+# true) in these lanes. Verbose output can dump the deliver options hash, which
+# contains the App Store Connect API key material.
+#
 # Listing metadata (description, keywords, screenshots, ...) is managed manually
-# in App Store Connect and is intentionally NOT overwritten here. Only the
-# "What's New" release notes are pushed, and only when a release_notes.txt file
-# is present in METADATA_PATH.
+# in App Store Connect and is intentionally NOT overwritten here: `skip_metadata`
+# / `skip_screenshots` keep deliver from reading back and re-uploading those
+# fields. The ONLY field pushed is the "What's New" release notes, and only when
+# a release_notes.txt file is present in METADATA_PATH/<locale>/.
 #
 # Required env vars (wired from GitHub secrets in the workflows):
 #   ASC_KEY_ID       App Store Connect API key id      (secrets.mac_api_key_id)
@@ -28,7 +33,8 @@
 #   IPA_PATH         Path to the built .ipa            (ios lane)
 #   PKG_PATH         Path to the built MAS .pkg        (mac lane)
 # Optional:
-#   METADATA_PATH      deliver metadata dir (default: fastlane/appstore_metadata)
+#   METADATA_PATH      release-notes dir (default: fastlane/appstore_metadata)
+#   RELEASE_NOTES_LOCALE  locale subdir to read (default: en-US)
 #   SUBMIT_FOR_REVIEW  "false" to only upload the build without submitting
 
 APP_IDENTIFIER = 'com.super-productivity.app'
@@ -46,13 +52,29 @@ def submit_for_review?
   ENV.fetch('SUBMIT_FOR_REVIEW', 'true') != 'false'
 end
 
+# "What's New" text, read from METADATA_PATH/<locale>/release_notes.txt and
+# returned as the per-locale hash deliver expects. Returns nil when the file is
+# absent so that deliver leaves the existing release notes untouched.
+def release_notes
+  locale = ENV.fetch('RELEASE_NOTES_LOCALE', 'en-US')
+  metadata_path = ENV.fetch('METADATA_PATH', 'fastlane/appstore_metadata')
+  notes_file = File.join(metadata_path, locale, 'release_notes.txt')
+  return nil unless File.exist?(notes_file)
+
+  text = File.read(notes_file).strip
+  return nil if text.empty?
+
+  { locale => text }
+end
+
 # Shared deliver options. `extra` carries the platform-specific binary path.
 def deliver_options(extra)
-  {
+  options = {
     api_key: asc_api_key,
     app_identifier: APP_IDENTIFIER,
-    metadata_path: ENV.fetch('METADATA_PATH', 'fastlane/appstore_metadata'),
-    # Listing metadata/screenshots are curated by hand in App Store Connect.
+    # Listing metadata/screenshots are curated by hand in App Store Connect;
+    # skip them so deliver only touches the build + release notes below.
+    skip_metadata: true,
     skip_screenshots: true,
     # Wait for App Store Connect to finish processing the upload before the
     # version can be submitted.
@@ -66,7 +88,13 @@ def deliver_options(extra)
     },
     # Non-interactive: skip the HTML report confirmation prompt.
     force: true,
-  }.merge(extra)
+  }
+
+  # Push "What's New" only; skip_metadata above keeps every other field as-is.
+  notes = release_notes
+  options[:release_notes] = notes if notes
+
+  options.merge(extra)
 end
 
 platform :ios do

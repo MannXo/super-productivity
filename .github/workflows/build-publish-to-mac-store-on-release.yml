@@ -177,23 +177,35 @@ jobs:
       - run: ls .tmp/app-builds
         shell: bash
 
-      - name: Install fastlane
-        run: bundle install
+      - name: Set up Ruby and fastlane
+        # Pinned by SHA per repo policy; installs the locked Bundler/gems and
+        # caches them so the ~210-gem fastlane tree isn't reinstalled each run.
+        uses: ruby/setup-ruby@afeafc3d1ab54a631816aba4c914a0081c12ff2f # latest
+        with:
+          bundler-cache: true
 
       - name: Prepare App Store release notes
         run: node tools/prepare-appstore-release-notes.js
 
       # Upload the MAS .pkg to App Store Connect and (for final release tags)
       # submit it for review with automatic release on approval. Pre-release
-      # tags (RC/beta/alpha) and manual runs only upload the build.
+      # tags (any tag containing "-", e.g. -rc.0/-beta.1) and manual runs only
+      # upload the build. The "-" check is case-insensitive by construction,
+      # unlike contains(...,'RC'); the repo's RC tags are mostly lowercase.
       - name: Upload to App Store Connect and submit for review
         env:
           ASC_KEY_ID: ${{ secrets.mac_api_key_id }}
           ASC_ISSUER_ID: ${{ secrets.mac_api_key_issuer_id }}
           ASC_KEY_CONTENT: ${{ secrets.mac_api_key }}
-          SUBMIT_FOR_REVIEW: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, 'RC') && !contains(github.ref, 'beta') && !contains(github.ref, 'alpha') }}
+          SUBMIT_FOR_REVIEW: ${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref, '-') }}
         run: |
-          PKG_PATH="$(ls .tmp/app-builds/mas-universal/super*.pkg | head -n1)"
-          export PKG_PATH
+          set -euo pipefail
+          shopt -s nullglob
+          pkgs=(.tmp/app-builds/mas-universal/super*.pkg)
+          if [ ${#pkgs[@]} -ne 1 ]; then
+            echo "Expected exactly 1 .pkg, found ${#pkgs[@]}: ${pkgs[*]:-none}"
+            exit 1
+          fi
+          export PKG_PATH="${pkgs[0]}"
           echo "Submitting $PKG_PATH (submit_for_review=$SUBMIT_FOR_REVIEW)"
           bundle exec fastlane mac release
