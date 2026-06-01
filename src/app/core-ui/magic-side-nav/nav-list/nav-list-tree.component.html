@@ -157,16 +157,19 @@
 }
 
 <!-- Project Visibility Menu -->
-<!-- Hidden-project opacity style in src/styles/components/_overwrite-material.scss -->
 <mat-menu #visibilityMenu="matMenu">
   @for (project of allUnarchivedProjects(); track project.id) {
     <button
       mat-menu-item
-      [class.is-hidden-from-menu]="project.isHiddenFromMenu"
       (click)="toggleProjectVisibility(project.id)"
     >
+      @if (!project.isHiddenFromMenu) {
+        <mat-icon>check_box</mat-icon>
+      } @else {
+        <mat-icon>check_box_outline_blank</mat-icon>
+      }
       <mat-icon>{{ project.icon || DEFAULT_PROJECT_ICON }}</mat-icon>
-      <span>{{ project.title }}</span>
+      {{ project.title }}
     </button>
   }
   @if (archivedProjectsCount() > 0) {
