@@ -1966,4 +1966,68 @@ describe('TaskRepeatCfgService', () => {
       expect(dispatchedAction.taskId).toBe(taskId);
     });
   });
+
+  describe('Regression #7923 — delete instance then move startDate to today', () => {
+    // Reproduction of issue #7923:
+    // 1. Recurring task created with startDate = future (e.g. June 10), DAILY
+    // 2. The task instance for that future date is plain-deleted
+    // 3. User clicks the transparent projection for the next day and changes
+    //    startDate to today via the dialog
+    // 4. rescheduleTaskOnRepeatCfgUpdate$ re-anchors lastTaskCreationDay to
+    //    yesterday and calls addAllDueToday() (#7768 Bug 2 fix)
+    // 5. addAllDueToday() calls createRepeatableTask() with the re-anchored config
+    //
+    // The test exercises step 5 — the "real creation path" that the effect tests
+    // skip by mocking addAllDueToday.
+
+    it('should create task for today when startDate = today and lastTaskCreationDay = yesterday (post-re-anchor state)', async () => {
+      const today = new Date();
+      today.setHours(10, 0, 0, 0);
+      const todayStr = formatIsoDate(today);
+
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayStr = formatIsoDate(yesterday);
+
+      const expectedId = getRepeatableTaskId('cfg-7923', todayStr);
+
+      // Config in the state produced by the re-anchor:
+      //   startDate was changed to today, lastTaskCreationDay set to yesterday
+      const cfgPostReAnchor: TaskRepeatCfg = {
+        ...DEFAULT_TASK_REPEAT_CFG,
+        id: 'cfg-7923',
+        title: '#7923 Regression',
+        projectId: 'test-project',
+        repeatCycle: 'DAILY',
+        repeatEvery: 1,
+        startDate: todayStr,
+        lastTaskCreationDay: yesterdayStr,
+        tagIds: [],
+      };
+
+      // No live instances — the future-dated task was plain-deleted in step 2
+      taskService.getTasksWithSubTasksByRepeatCfgId$.and.returnValue(of([]));
+      taskService.createNewTaskWithDefaults.and.returnValue({
+        ...mockTask,
+        id: expectedId,
+        dueDay: todayStr,
+      });
+
+      await service.createRepeatableTask(cfgPostReAnchor, today.getTime());
+
+      const dispatched = dispatchSpy.calls.all().map((c) => c.args[0] as any);
+      const addTaskAction = dispatched.find(
+        (a) => a.type === TaskSharedActions.addTask.type,
+      );
+      expect(addTaskAction)
+        .withContext('addTask action must be dispatched for today')
+        .toBeDefined();
+      expect(addTaskAction?.task?.dueDay)
+        .withContext('task dueDay must be today')
+        .toBe(todayStr);
+      expect(addTaskAction?.task?.id)
+        .withContext('task must use deterministic id')
+        .toBe(expectedId);
+    });
+  });
 });
