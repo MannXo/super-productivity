@@ -24,10 +24,12 @@ import { expect, test } from '../../fixtures/test.fixture';
  */
 
 // Fix the clock so calendar interactions and date arithmetic are deterministic.
-// Use a Wednesday in May so future offset (+9 days → Friday May 10) doesn't
-// cross a month boundary, keeping the date-picker entry simple.
+// May 1, 2026 is mid-month, so the future offset (+9 days → May 10) stays inside
+// the same month, keeping the date-picker entry simple. The repeat is DAILY, so
+// the weekday is irrelevant.
 const FIXED_TODAY = new Date('2026-05-01T10:00:00');
 const FIXED_TODAY_DDMMYYYY = '01/05/2026';
+const FIXED_TODAY_DATA_DAY = '2026-05-01'; // planner-day[data-day] form of FIXED_TODAY
 const FUTURE_START_DDMMYYYY = '10/05/2026'; // today + 9 days
 
 const openRecurDialogFromProjection = async (
@@ -168,12 +170,15 @@ test.describe('Recurring Task - Move startDate to Today Creates Real Instance (#
     // Guard: there must be NO transparent projection for today in the planner.
     // A projection means addAllDueToday() did not materialise the real instance.
     await gotoHashRoute(page, '/#/planner', page.locator('planner-day').first());
-    const todayColumn = page
-      .locator('planner-day')
-      .filter({ has: page.locator('.date', { hasText: /^1\/5$/ }) });
-    await expect(todayColumn).toBeVisible({ timeout: 10000 });
+    // Match today by the stable data-day attribute rather than the rendered date
+    // text: during the route-enter animation the leaving and entering columns are
+    // briefly both in the DOM, so a text filter resolves to 2 elements. Asserting
+    // the projection count across every matching column (toHaveCount(0)) is correct
+    // regardless of how many copies the animation leaves behind.
+    const todayColumns = page.locator(`planner-day[data-day="${FIXED_TODAY_DATA_DAY}"]`);
+    await expect(todayColumns.first()).toBeVisible({ timeout: 10000 });
     await expect(
-      todayColumn.locator('planner-repeat-projection').filter({ hasText: taskTitle }),
+      todayColumns.locator('planner-repeat-projection').filter({ hasText: taskTitle }),
     ).toHaveCount(0, { timeout: 5000 });
   });
 });
