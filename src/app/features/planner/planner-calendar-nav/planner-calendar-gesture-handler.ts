@@ -141,6 +141,14 @@ export class CalendarGestureHandler {
         // leaving the element without maxHeight (visually stuck open).
         weeksEl.style.transition = '';
         weeksEl.style.maxHeight = targetHeight + 'px';
+        // Re-read rather than reuse the value written before the animation: if
+        // the box grew during it, `rowHeight()` can reach `ROW_HEIGHT` while
+        // still collapsed, so the binding's value never changes across the flip
+        // and Angular writes nothing, stranding the pre-growth inline height.
+        weeksEl.style.setProperty(
+          '--row-height',
+          `${expanded ? this._cb.getRowHeight() : ROW_HEIGHT}px`,
+        );
         if (innerEl) {
           innerEl.style.transition = '';
           innerEl.style.transform = `translateY(${targetOffset}px)`;

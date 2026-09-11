@@ -604,6 +604,30 @@ describe('CalendarGestureHandler', () => {
         );
       });
 
+      // The binding cannot be relied on to correct the inline value at the end
+      // of the animation. Collapsed at 29px rows Angular has written 40px
+      // (`displayRowHeight()` is ROW_HEIGHT while collapsed); if the box grows
+      // mid-animation so `rowHeight()` reaches ROW_HEIGHT, the bound value is
+      // 40px before the flip and 40px after it, so Angular skips both writes
+      // and the 29px this handler set inline would stand. That is a 240px grid
+      // over 174px of rows: a dead strip, and 25px tap targets.
+      it('should re-read the row height after the animation, not reuse it', () => {
+        cb.getExpandedHeight.and.returnValue(MIN_ROW_HEIGHT * WEEKS_SHOWN);
+        cb.getRowHeight.and.returnValue(MIN_ROW_HEIGHT);
+
+        handler.snapTo(true);
+        expect(weeksEl.style.getPropertyValue('--row-height')).toBe(
+          `${MIN_ROW_HEIGHT}px`,
+        );
+
+        // The box grows while the 200ms animation runs.
+        cb.getExpandedHeight.and.returnValue(ROW_HEIGHT * WEEKS_SHOWN);
+        cb.getRowHeight.and.returnValue(ROW_HEIGHT);
+        jasmine.clock().tick(SNAP_DURATION + 20);
+
+        expect(weeksEl.style.getPropertyValue('--row-height')).toBe(`${ROW_HEIGHT}px`);
+      });
+
       it('should collapse to a full-size row, never a shrunken one', () => {
         cb.getExpandedHeight.and.returnValue(MIN_ROW_HEIGHT * WEEKS_SHOWN);
 
