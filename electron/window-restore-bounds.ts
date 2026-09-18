@@ -26,8 +26,11 @@ let trackedBounds: WindowBounds | null = null;
 
 export const getRestoreBounds = (): WindowBounds | null => trackedBounds;
 
-const isFiniteNumber = (n: unknown): n is number =>
-  typeof n === 'number' && Number.isFinite(n);
+// Integer rather than finite, matching the hasBounds() check in
+// electron-window-state that this replaces. Everything the app stores comes
+// from getBounds() and is integral, so a fractional value is corruption.
+const isIntegerNumber = (n: unknown): n is number =>
+  typeof n === 'number' && Number.isInteger(n);
 
 const isSameBounds = (a: WindowBounds | null, b: WindowBounds): boolean =>
   a !== null &&
@@ -87,10 +90,10 @@ export const parseStoredBounds = (value: unknown): WindowBounds | null => {
   }
   const { x, y, width, height } = value as Record<string, unknown>;
   if (
-    !isFiniteNumber(x) ||
-    !isFiniteNumber(y) ||
-    !isFiniteNumber(width) ||
-    !isFiniteNumber(height) ||
+    !isIntegerNumber(x) ||
+    !isIntegerNumber(y) ||
+    !isIntegerNumber(width) ||
+    !isIntegerNumber(height) ||
     width <= 0 ||
     height <= 0
   ) {

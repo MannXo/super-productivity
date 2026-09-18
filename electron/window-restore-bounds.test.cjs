@@ -116,7 +116,7 @@ test('negative coordinates are kept, since a left or upper display has them', ()
   });
 });
 
-test('anything that is not a complete, finite, positively sized rectangle is rejected', () => {
+test('anything that is not a complete, integral, positively sized rectangle is rejected', () => {
   const { parseStoredBounds } = loadModule();
 
   assert.equal(parseStoredBounds(undefined), null);
@@ -128,6 +128,8 @@ test('anything that is not a complete, finite, positively sized rectangle is rej
   assert.equal(parseStoredBounds({ x: 0, y: 0, width: Infinity, height: 700 }), null);
   assert.equal(parseStoredBounds({ x: 0, y: 0, width: 0, height: 700 }), null);
   assert.equal(parseStoredBounds({ x: 0, y: 0, width: 900, height: -700 }), null);
+  assert.equal(parseStoredBounds({ x: 0.5, y: 0, width: 900, height: 700 }), null);
+  assert.equal(parseStoredBounds({ x: 0, y: 0, width: 900.25, height: 700 }), null);
 });
 
 // --- clampBoundsToDisplay ---------------------------------------------------
