@@ -217,6 +217,7 @@ describe('JiraIssueEffects', () => {
       jiraCfg = { ...jiraCfg, isSyncDeadlineToJira: true };
       issueProviderService.getCfgOnce$.and.returnValue(of(jiraCfg));
       jiraApiService.updateIssueFields$.and.returnValue(of({}));
+      issueService.refreshIssueTask.and.resolveTo();
       TestBed.inject(JiraIssueEffects).syncDeadlineToJira$.subscribe();
     };
 
@@ -233,6 +234,17 @@ describe('JiraIssueEffects', () => {
         { duedate: '2026-10-05' },
         jiraCfg,
       );
+    }));
+
+    it('refreshes the task after writing the due date', fakeAsync(() => {
+      setupDeadlineSync({ deadlineDay: '2026-10-05' });
+
+      actions$.next(
+        TaskSharedActions.setDeadline({ taskId: task.id, deadlineDay: '2026-10-05' }),
+      );
+      tick();
+
+      expect(issueService.refreshIssueTask).toHaveBeenCalledWith(task, false, false);
     }));
 
     it('reduces a deadline with a time to its day', fakeAsync(() => {
@@ -260,6 +272,58 @@ describe('JiraIssueEffects', () => {
         { duedate: null },
         jiraCfg,
       );
+    }));
+
+    it('sets the Jira due date when short syntax sets a deadline day', fakeAsync(() => {
+      setupDeadlineSync({ deadlineDay: '2026-10-05' });
+
+      actions$.next(
+        TaskSharedActions.applyShortSyntax({
+          task,
+          taskChanges: { deadlineDay: '2026-10-05' },
+        }),
+      );
+      tick();
+
+      expect(jiraApiService.updateIssueFields$).toHaveBeenCalledWith(
+        'issue-1',
+        { duedate: '2026-10-05' },
+        jiraCfg,
+      );
+    }));
+
+    it('reduces a short syntax deadline with a time to its day', fakeAsync(() => {
+      const deadlineWithTime = new Date(2026, 9, 5, 17, 30).getTime();
+      setupDeadlineSync({ deadlineWithTime, deadlineDay: null });
+
+      actions$.next(
+        TaskSharedActions.applyShortSyntax({
+          task,
+          taskChanges: { deadlineWithTime, deadlineDay: null },
+        }),
+      );
+      tick();
+
+      expect(jiraApiService.updateIssueFields$).toHaveBeenCalledWith(
+        'issue-1',
+        { duedate: '2026-10-05' },
+        jiraCfg,
+      );
+    }));
+
+    it('ignores short syntax that does not touch the deadline', fakeAsync(() => {
+      setupDeadlineSync({ deadlineDay: '2026-10-05' });
+
+      actions$.next(
+        TaskSharedActions.applyShortSyntax({
+          task,
+          taskChanges: { title: 'Renamed' },
+        }),
+      );
+      tick();
+
+      expect(taskService.getByIdOnce$).not.toHaveBeenCalled();
+      expect(jiraApiService.updateIssueFields$).not.toHaveBeenCalled();
     }));
 
     it('does nothing when the option is off', fakeAsync(() => {

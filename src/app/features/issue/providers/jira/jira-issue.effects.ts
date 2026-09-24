@@ -101,8 +101,23 @@ export class JiraIssueEffects {
   syncDeadlineToJira$ = createEffect(
     () =>
       this._actions$.pipe(
-        ofType(TaskSharedActions.setDeadline, TaskSharedActions.removeDeadline),
-        concatMap(({ taskId }) => this._taskService.getByIdOnce$(taskId)),
+        ofType(
+          TaskSharedActions.setDeadline,
+          TaskSharedActions.removeDeadline,
+          TaskSharedActions.applyShortSyntax,
+        ),
+        filter(
+          (action) =>
+            action.type !== TaskSharedActions.applyShortSyntax.type ||
+            action.taskChanges.deadlineDay !== undefined ||
+            action.taskChanges.deadlineWithTime !== undefined,
+        ),
+        map((action) =>
+          action.type === TaskSharedActions.applyShortSyntax.type
+            ? action.task.id
+            : action.taskId,
+        ),
+        concatMap((taskId) => this._taskService.getByIdOnce$(taskId)),
         filter(
           (task): task is Task =>
             !!task &&
@@ -123,7 +138,12 @@ export class JiraIssueEffects {
               { duedate: getJiraDueDate(task) },
               jiraCfg,
             )
-            .pipe(catchError(() => EMPTY)),
+            .pipe(
+              concatMap(() =>
+                from(this._issueService.refreshIssueTask(task, false, false)),
+              ),
+              catchError(() => EMPTY),
+            ),
         ),
       ),
     { dispatch: false },
