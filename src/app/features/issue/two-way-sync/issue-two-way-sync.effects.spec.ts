@@ -1183,6 +1183,42 @@ describe('IssueTwoWaySyncEffects', () => {
       adapterRegistry.unregister('TEST_PROVIDER');
     }));
 
+    it('should not call deleteIssue when UNDO is clicked as the snack exits', fakeAsync(() => {
+      const deleteIssueSpy = jasmine.createSpy('deleteIssue').and.resolveTo(undefined);
+      const adapter = createMockAdapter({ deleteIssue: deleteIssueSpy });
+      adapterRegistry.register('TEST_PROVIDER', adapter);
+
+      const cfg = createMockIssueProvider();
+      issueProviderServiceSpy.getCfgOnce$.and.returnValue(of(cfg));
+
+      const task = createMockTask({
+        id: 'task-1',
+        issueType: 'TEST_PROVIDER' as any,
+        issueId: 'issue-1',
+        issueProviderId: 'provider-1',
+      }) as TaskWithSubTasks;
+      (task as any).subTasks = [];
+
+      effects.deleteIssueOnTaskDelete$.subscribe();
+
+      actions$.next(TaskSharedActions.deleteTask({ task }));
+
+      // snack debounce, enter animation fallback, exit animation
+      tick(TASK_DELETE_UNDO_WINDOW_MS + 100 + 200 + 75);
+      actions$.next(
+        TaskSharedActions.restoreDeletedTask({
+          task,
+          tagTaskIdMap: {},
+          deletedTaskEntities: {},
+        }),
+      );
+      tick(REMOTE_ISSUE_DELETE_DEFER_MS);
+
+      expect(deleteIssueSpy).not.toHaveBeenCalled();
+
+      adapterRegistry.unregister('TEST_PROVIDER');
+    }));
+
     it('should still call deleteIssue when a different task is restored', fakeAsync(() => {
       const deleteIssueSpy = jasmine.createSpy('deleteIssue').and.resolveTo(undefined);
       const adapter = createMockAdapter({ deleteIssue: deleteIssueSpy });

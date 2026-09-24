@@ -79,9 +79,11 @@ export const ANDROID_BACKGROUND_TICK_CAP_MS = 8 * 60 * 60 * 1000;
 // defer, UNDO is live after the remote issue is already gone.
 export const TASK_DELETE_UNDO_WINDOW_MS = 5000;
 
-// Grace on top of the undo window before the remote delete fires, so an UNDO
-// clicked on the window's last tick still wins.
-export const REMOTE_ISSUE_DELETE_DEFER_MS = TASK_DELETE_UNDO_WINDOW_MS + 250;
+// The snack's UNDO stays clickable longer than its duration. The grace covers
+// SnackService's 100ms open debounce, MatSnackBar arming the duration only
+// after its enter animation (up to 200ms), the button staying live through the
+// exit animation (up to 200ms) and timer jitter.
+export const REMOTE_ISSUE_DELETE_DEFER_MS = TASK_DELETE_UNDO_WINDOW_MS + 1000;
 
 // TODO use
 // const CORS_SKIP_EXTRA_HEADER_PROP = 'sp_cors_skip' as const;
