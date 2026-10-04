@@ -59,6 +59,7 @@ import { isValidSplitTime } from '../../../util/is-valid-split-time';
 import { DateService } from '../../../core/date/date.service';
 import { MAT_SELECT_CONFIG } from '@angular/material/select';
 import { getNextRepeatOccurrence } from '../store/get-next-repeat-occurrence.util';
+import { getNewestPossibleDueDate } from '../store/get-newest-possible-due-date.util';
 import { SCHEDULE_AFFECTING_FIELDS } from '../store/schedule-affecting-fields.const';
 
 // Fields whose change requires offering "Update all task instances?" — covers
@@ -93,6 +94,21 @@ const NEXT_OCCURRENCE_FIELDS: (keyof TaskRepeatCfgCopy)[] = [
   'quickSetting',
   'repeatFromCompletionDate',
 ];
+
+// The next occurrence task creation would actually produce: it passes over
+// skipped instances (deletedInstanceDates), so the preview must too.
+const getNextCreatedOccurrence = (cfg: TaskRepeatCfg, fromDate: Date): Date | null => {
+  const skipped = cfg.deletedInstanceDates ?? [];
+  let next = getNextRepeatOccurrence(cfg, fromDate);
+  for (
+    let i = 0;
+    next && i < skipped.length && skipped.includes(getDbDateStr(next));
+    i++
+  ) {
+    next = getNextRepeatOccurrence(cfg, next);
+  }
+  return next;
+};
 
 // TASK_REPEAT_CFG_FORM_CFG
 @Component({
@@ -281,7 +297,18 @@ export class DialogEditTaskRepeatCfgComponent {
         T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE_UNSAVED,
       );
     }
-    const next = getNextRepeatOccurrence(saved as TaskRepeatCfg, new Date());
+    const now = new Date();
+    if (cfg.waitForCompletion) {
+      // An occurrence that is already due is held back until the live instance
+      // is done and is created at that moment, so its date is not predictable.
+      const due = getNewestPossibleDueDate(saved as TaskRepeatCfg, now);
+      if (due && !saved.deletedInstanceDates?.includes(getDbDateStr(due))) {
+        return this._translateService.instant(
+          T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE_AFTER_COMPLETION,
+        );
+      }
+    }
+    const next = getNextCreatedOccurrence(saved as TaskRepeatCfg, now);
     if (!next) {
       return null;
     }
@@ -313,7 +340,11 @@ export class DialogEditTaskRepeatCfgComponent {
 
   inheritedSubtaskTitles = computed(() => {
     const cfg = this.repeatCfg();
-    return cfg.shouldInheritSubtasks
+    // Enabling inheritance replaces the templates on save with a snapshot of the
+    // newest instance's subtasks, so the stored templates would be stale here.
+    const saved = this.repeatCfgInitial();
+    const isNewlyInherited = !!saved && !saved.shouldInheritSubtasks;
+    return cfg.shouldInheritSubtasks && !isNewlyInherited
       ? (cfg.subTaskTemplates ?? []).map((subTask) => subTask.title)
       : [];
   });

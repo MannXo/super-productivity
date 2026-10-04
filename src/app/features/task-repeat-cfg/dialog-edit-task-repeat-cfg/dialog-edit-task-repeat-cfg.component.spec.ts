@@ -1011,12 +1011,14 @@ describe('DialogEditTaskRepeatCfgComponent', () => {
       startDate: '2026-06-01',
       lastTaskCreationDay: '2026-06-09',
     };
-    const expectedDate = new Date(2026, 5, 10).toLocaleDateString('en-US', {
-      weekday: 'short',
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
+    const formatDay = (day: number): string =>
+      new Date(2026, 5, day).toLocaleDateString('en-US', {
+        weekday: 'short',
+        year: 'numeric',
+        month: 'short',
+        day: 'numeric',
+      });
+    const expectedDate = formatDay(10);
 
     let instantCalls: { key: string | string[]; params?: object }[];
 
@@ -1057,6 +1059,40 @@ describe('DialogEditTaskRepeatCfgComponent', () => {
 
       expect(component.nextOccurrenceText()).toBe(
         T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE_WAIT_FOR_COMPLETION,
+      );
+    });
+
+    it('passes over a skipped instance', async () => {
+      const component = await setup({
+        repeatCfg: { ...dailyCfg, deletedInstanceDates: ['2026-06-10'] },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
+      expect(instantCalls.at(-1)!.params).toEqual({ date: formatDay(11) });
+    });
+
+    it('passes over consecutive skipped instances', async () => {
+      const component = await setup({
+        repeatCfg: { ...dailyCfg, deletedInstanceDates: ['2026-06-10', '2026-06-11'] },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
+      expect(instantCalls.at(-1)!.params).toEqual({ date: formatDay(12) });
+    });
+
+    it('shows no date while a due instance waits for the current one to be done', async () => {
+      // The June 8 instance is unfinished, so June 9 is held back and is created
+      // as soon as June 8 is completed.
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          waitForCompletion: true,
+          lastTaskCreationDay: '2026-06-08',
+        },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(
+        T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE_AFTER_COMPLETION,
       );
     });
 
@@ -1120,6 +1156,21 @@ describe('DialogEditTaskRepeatCfgComponent', () => {
       expect(component.inheritedSubtaskTitles()).toEqual(['Pack bag', 'Water plants']);
 
       component.repeatCfg.update((cfg) => ({ ...cfg, shouldInheritSubtasks: false }));
+
+      expect(component.inheritedSubtaskTitles()).toEqual([]);
+    });
+
+    it('lists no subtasks while inheritance is newly enabled', async () => {
+      // Saving replaces the templates with the newest instance's subtasks.
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          shouldInheritSubtasks: false,
+          subTaskTemplates: [{ title: 'Stale template' }],
+        },
+      });
+
+      component.repeatCfg.update((cfg) => ({ ...cfg, shouldInheritSubtasks: true }));
 
       expect(component.inheritedSubtaskTitles()).toEqual([]);
     });
