@@ -316,9 +316,8 @@ module.exports = tseslint.config(
   // disable whose reason says why this value holds no user content.
 
   // Op-log persistence: inside an adapter.transaction() callback only the tx
-  // handle may be used — adapter methods enqueue behind the transaction's own
-  // FIFO queue slot on the SQLite backend and deadlock (see
-  // SqliteOpLogAdapter._serialize()).
+  // handle may be used — an adapter method runs outside the transaction, so
+  // its write is not atomic with it (see eslint-local-rules/rules/no-adapter-in-tx.js).
   {
     files: ['src/app/op-log/**/*.ts'],
     plugins: {
@@ -434,10 +433,10 @@ module.exports = tseslint.config(
   // never grow. When you shrink one, lower its cap to lock the cleanup in; a
   // cap may only ever go down. Delete an entry once its file is under 1200.
   ...Object.entries({
-    'src/app/op-log/sync/conflict-resolution.service.ts': 4775,
-    'src/app/op-log/sync-providers/file-based/file-based-sync-adapter.service.ts': 3292,
-    'src/app/op-log/persistence/operation-log-store.service.ts': 3203,
-    'src/app/op-log/sync/operation-log-sync.service.ts': 2704,
+    'src/app/op-log/sync/conflict-resolution.service.ts': 4496,
+    'src/app/op-log/sync-providers/file-based/file-based-sync-adapter.service.ts': 3175,
+    'src/app/op-log/persistence/operation-log-store.service.ts': 3074,
+    'src/app/op-log/sync/operation-log-sync.service.ts': 2564,
     'src/app/plugins/plugin-bridge.service.ts': 2351,
     'src/app/imex/sync/sync-wrapper.service.ts': 2084,
     'src/app/plugins/plugin.service.ts': 1857,
