@@ -166,17 +166,19 @@ jobs:
         run: cp .env.example .env
 
       - name: Start Sync Docker Services
-        # Retry to survive transient Docker Hub pull timeouts / rate limits;
-        # timeout_minutes also bounds the otherwise-unbounded health-wait loop.
+        # Retry to survive transient Docker Hub pull / Alpine mirror failures.
+        # set -eu fails an attempt as soon as the build fails; without it the
+        # health wait spun until timeout_minutes, burning the job's time budget.
         uses: nick-fields/retry@ce71cc2ab81d554ebbe88c79ab5975992d79ba08 # v3
         with:
-          timeout_minutes: 12
+          timeout_minutes: 6
           max_attempts: 3
-          retry_wait_seconds: 20
+          retry_wait_seconds: 60
           command: |
+            set -eu
             docker compose -f docker-compose.yaml -f docker-compose.supersync.yaml up -d --build supersync webdav
             echo "⏳ Waiting for SuperSync server..."
-            until curl -s http://localhost:1901/health > /dev/null 2>&1; do sleep 1; done
+            timeout 180 sh -c 'until curl -s http://localhost:1901/health > /dev/null 2>&1; do sleep 1; done'
             echo "✓ SuperSync server ready!"
             chmod +x ./scripts/wait-for-webdav.sh
             ./scripts/wait-for-webdav.sh

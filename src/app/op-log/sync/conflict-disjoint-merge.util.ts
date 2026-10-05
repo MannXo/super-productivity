@@ -6,16 +6,18 @@
  * KEEPS BOTH by synthesizing a single merged UPDATE whose delta is the union of
  * both sides' changed fields.
  *
- * No Angular, no I/O — deterministic, so the merge decision and the synthesized
- * changes delta are unit-testable in isolation. Determinism is the whole point:
- * both clients must arrive at the identical field/value map regardless of
- * which one performs the merge (key insertion order may differ between the
- * author and wire shapes of a restored clear — immaterial, since the merged
- * ops carry separate ids and `updateOne` is order-independent). See
- * `synthesizeMergedChanges`.
+ * Field patches (conflict-field-patch.util.ts) generalize this to fields both
+ * sides wrote; this file keeps the shared field extraction and the disjoint
+ * predicate that the commuting-crossing checks use.
+ *
+ * No Angular, no I/O — deterministic, so the merge decision and the extracted
+ * fields are unit-testable in isolation. Determinism is the whole point: both
+ * clients must extract the identical field set regardless of which one
+ * resolves (key insertion order may differ between the author and wire shapes
+ * of a restored clear — immaterial, since `updateOne` is order-independent).
  */
 
-import { ActionType, OpType } from '../core/operation.types';
+import { ActionType, isLwwUpdatePayload, OpType } from '../core/operation.types';
 import type { Operation } from '../core/operation.types';
 import {
   extractActionPayload,
@@ -23,17 +25,15 @@ import {
   extractUpdateChanges,
   isMultiEntityPayload,
 } from '@sp/sync-core';
-import { ConflictJournalFieldDiff, NOISE_FIELDS } from './conflict-journal.model';
-import { isMultiEntityOperation } from '../util/get-op-entity-ids.util';
+import { getOpEntityIds, isMultiEntityOperation } from '../util/get-op-entity-ids.util';
 import { applyClearedFields } from '../../util/cleared-update-fields';
 
-/** Identity of one side of the conflict for the deterministic noise tiebreak. */
-export interface MergeSideMeta {
-  /** Max timestamp across that side's ops. */
-  timestamp: number;
-  /** The client that authored that side. */
-  clientId: string;
-}
+/** Metadata timestamps excluded from real-field overlap checks. */
+export const NOISE_FIELDS: ReadonlySet<string> = new Set<string>([
+  'modified',
+  'lastModified',
+  'created',
+]);
 
 /**
  * The changed fields of ONE op, scoped to the entity currently in conflict.
@@ -145,8 +145,7 @@ const readClearedFields = (payload: unknown): string[] | undefined => {
 /**
  * Union of the changed-field maps across a set of ops on one side.
  *
- * Mirrors the SPAP-13 `mergeChangedFields` pattern (was private to the journal
- * emission util). DELETE ops carry no meaningful field changes and are skipped —
+ * DELETE ops carry no meaningful field changes and are skipped —
  * though disjoint-merge eligibility already excludes any side with a DELETE.
  */
 export const mergeChangedFields = (
@@ -176,7 +175,7 @@ export const isOpaqueChangeOp = (
 /**
  * True when the side contains at least one op whose mutation is real but not
  * expressible as field values (see `extractOpChanges`). A side with opaque
- * changes must never be classified as "changed nothing real" (journal `noise`)
+ * changes must never be classified as "changed nothing real"
  * nor auto-merged (the synthesized entity would silently drop the opaque
  * mutation and the two clients would diverge).
  */
@@ -185,6 +184,27 @@ export const hasOpaqueChanges = (
   payloadKey: string,
   entityId: string,
 ): boolean => ops.some((op) => isOpaqueChangeOp(op, payloadKey, entityId));
+
+/**
+ * True when every field the side changed is a NOISE field (and the side is
+ * decomposable at all — opaque ops carry real, non-extractable mutations).
+ */
+export const isNoiseOnlySide = (
+  ops: Operation[],
+  payloadKey: string,
+  entityId: string,
+): boolean => {
+  if (ops.some((op) => op.opType === OpType.Delete)) {
+    return false;
+  }
+  if (hasOpaqueChanges(ops, payloadKey, entityId)) {
+    return false;
+  }
+  const changedFields = Object.keys(mergeChangedFields(ops, payloadKey, entityId));
+  return (
+    changedFields.length > 0 && changedFields.every((field) => NOISE_FIELDS.has(field))
+  );
+};
 
 /** The non-NOISE keys of a changed-field map. */
 const nonNoiseKeys = (changes: Record<string, unknown>): string[] =>
@@ -204,7 +224,7 @@ export const isAdditiveTimeOp = (op: Operation): boolean =>
   op.actionType === ActionType.TASK_REMOVE_TIME_SPENT;
 
 /** The task fields a `syncTimeSpent` delta mutates once applied. */
-const SYNC_TIME_SPENT_FIELDS: readonly string[] = ['timeSpent', 'timeSpentOnDay'];
+export const SYNC_TIME_SPENT_FIELDS: readonly string[] = ['timeSpent', 'timeSpentOnDay'];
 
 /**
  * The non-NOISE fields one side touches, for the disjointness test only, split
@@ -223,7 +243,7 @@ const SYNC_TIME_SPENT_FIELDS: readonly string[] = ['timeSpent', 'timeSpentOnDay'
  * deliberately NOT surfaced through `mergeChangedFields`: the delta's values
  * must never be applied as a field patch.
  */
-const sideNonNoiseKeys = (
+export const sideNonNoiseKeys = (
   ops: Operation[],
   payloadKey: string,
   entityId: string,
@@ -243,26 +263,6 @@ const sideNonNoiseKeys = (
     );
   }
   return { absolute, additive };
-};
-
-/**
- * Deterministic tiebreak for a field both sides changed: the side with the
- * greater `(timestamp, clientId)`. Both clients compute the SAME global winner
- * because the comparison is over the two sides' identities, independent of which
- * side happens to be "local" on a given client.
- */
-export const noiseTiebreakSide = (
-  local: MergeSideMeta,
-  remote: MergeSideMeta,
-): 'local' | 'remote' => {
-  if (local.timestamp !== remote.timestamp) {
-    return local.timestamp > remote.timestamp ? 'local' : 'remote';
-  }
-  if (local.clientId !== remote.clientId) {
-    return local.clientId > remote.clientId ? 'local' : 'remote';
-  }
-  // Same identity on both — value is identical either way; pick 'local'.
-  return 'local';
 };
 
 /**
@@ -321,6 +321,32 @@ export const isDisjointMergeEligible = (params: {
 };
 
 /**
+ * Task fields that ops of other entity types also write in their reducers
+ * (tag and project deletion, planner moves), unseen by task-level checks.
+ */
+const CROSS_ENTITY_TASK_FIELDS: readonly string[] = [
+  'tagIds',
+  'projectId',
+  'parentId',
+  'dueDay',
+  'dueWithTime',
+];
+
+/**
+ * True when these ops may write a task field that ops of other entity types
+ * also write, or when an op's fields cannot be told (opaque, e.g. a planner op
+ * that declares the task). A `syncTimeSpent` delta only touches time fields.
+ */
+export const touchesCrossEntityTaskFields = (
+  ops: Operation[],
+  payloadKey: string,
+  entityId: string,
+): boolean => {
+  const side = sideNonNoiseKeys(ops, payloadKey, entityId);
+  return !side || CROSS_ENTITY_TASK_FIELDS.some((field) => side.absolute.has(field));
+};
+
+/**
  * True when a crossing involving a `syncTimeSpent` delta commutes, i.e.
  * applying both sides as-is is lossless and convergent. A delta can never be
  * expressed as a merged patch (`isAdditiveTimeOp`), so for such a crossing
@@ -332,111 +358,129 @@ export const isCommutingTimeDeltaCrossing = (params: {
   payloadKey: string;
   entityId: string;
 }): boolean =>
-  [...params.localOps, ...params.remoteOps].some(
+  isTimeDeltaBesideTimelessRow(params) ||
+  isTimeDeltaBesideTimelessOps(params.localOps, params.remoteOps, params) ||
+  isTimeDeltaBesideTimelessOps(params.remoteOps, params.localOps, params) ||
+  ([...params.localOps, ...params.remoteOps].some(
     (op) => op.actionType === ActionType.TIME_TRACKING_SYNC_TIME_SPENT,
-  ) && isDisjointMergeEligible(params);
+  ) &&
+    isDisjointMergeEligible(params));
 
 /**
- * Synthesizes the merged CHANGES DELTA — the union of both sides' changed
- * fields, applied on top of each client's current entity by `updateOne` (a
- * shallow MERGE, not a replace). This is the SINGLE source of truth both clients
- * must converge on.
+ * True when every local op is a `syncTimeSpent` delta and every remote op is
+ * an LWW resolution row (patch or snapshot another device built) of this one
+ * task that writes no time field (#10421, #10408). The delta then adds to
+ * whatever the row leaves, so both apply as they are.
  *
- * IMPORTANT — why a delta and NOT a full-entity snapshot: the delta is derived
- * purely from the two conflicting sides' ops, so both clients compute the
- * byte-identical map regardless of the rest of their entity state. A full-entity
- * snapshot (`{...currentEntity}`) would drag along fields NEITHER side touched;
- * if such an untouched field momentarily differs between the two clients (an
- * ordinary staggered-sync race — e.g. one client already applied a third
- * device's edit the other has not), the two synthesized snapshots differ, tie
- * under LWW at the identical `max(timestamp)`, and diverge PERMANENTLY. Carrying
- * only the changed fields makes the merged ops identical and leaves every
- * untouched field to its own op/LWW.
- *
- * Convergence: for every non-noise field the value is the same (disjoint sets →
- * each field owned by exactly one side); for every noise field both pick the
- * same global `(timestamp, clientId)` tiebreak winner. Therefore the delta is
- * identical on both clients.
+ * Only which top-level keys a `'patch'` row writes or clears is read, never
+ * its values; no op is built from the row and rows never merge (decision 5a
+ * in docs/sync-and-op-log/lww-field-level-resolution.md). A patch that writes
+ * or clears `timeSpent`/`timeSpentOnDay` keeps whole-entity LWW, and so does
+ * every `'replace'` row: `setOne` rewrites all fields, time included, whatever
+ * keys it carries.
  */
-export const synthesizeMergedChanges = (
-  localChanges: Record<string, unknown>,
-  remoteChanges: Record<string, unknown>,
-  localMeta: MergeSideMeta,
-  remoteMeta: MergeSideMeta,
-): Record<string, unknown> => {
-  const changes: Record<string, unknown> = {};
-
-  // Union of both sides' real (non-noise) fields. The two sets are guaranteed
-  // disjoint (isDisjointMergeEligible), so neither overwrites the other.
-  for (const [key, value] of Object.entries(localChanges)) {
-    if (!NOISE_FIELDS.has(key)) {
-      changes[key] = value;
+const isTimeDeltaBesideTimelessRow = ({
+  localOps,
+  remoteOps,
+  entityId,
+}: {
+  localOps: Operation[];
+  remoteOps: Operation[];
+  entityId: string;
+}): boolean =>
+  localOps.length > 0 &&
+  remoteOps.length > 0 &&
+  localOps.every((op) => op.actionType === ActionType.TIME_TRACKING_SYNC_TIME_SPENT) &&
+  remoteOps.every((op) => {
+    const payload = op.payload;
+    if (
+      op.entityType !== 'TASK' ||
+      op.opType !== OpType.Update ||
+      !isLwwUpdatePayload(payload) ||
+      payload.lwwUpdateMode !== 'patch'
+    ) {
+      return false;
     }
-  }
-  for (const [key, value] of Object.entries(remoteChanges)) {
-    if (!NOISE_FIELDS.has(key)) {
-      changes[key] = value;
-    }
-  }
-
-  // Resolve every noise field either side changed, deterministically, so both
-  // clients write the identical value (not each their own).
-  const winner = noiseTiebreakSide(localMeta, remoteMeta);
-  const noiseFields = new Set<string>(
-    [...Object.keys(localChanges), ...Object.keys(remoteChanges)].filter((field) =>
-      NOISE_FIELDS.has(field),
-    ),
-  );
-  for (const field of noiseFields) {
-    const localHas = field in localChanges;
-    const remoteHas = field in remoteChanges;
-    if (localHas && remoteHas) {
-      changes[field] = winner === 'local' ? localChanges[field] : remoteChanges[field];
-    } else if (localHas) {
-      changes[field] = localChanges[field];
-    } else {
-      changes[field] = remoteChanges[field];
-    }
-  }
-
-  return changes;
-};
-
-/**
- * Per-field journal diffs for a merged resolution. Each field records which
- * side's value the merge kept: `local` for local-changed fields, `remote` for
- * remote-changed fields, and the deterministic tiebreak winner for a noise field
- * both sides changed.
- */
-export const buildMergedFieldDiffs = (
-  localChanges: Record<string, unknown>,
-  remoteChanges: Record<string, unknown>,
-  localMeta: MergeSideMeta,
-  remoteMeta: MergeSideMeta,
-): ConflictJournalFieldDiff[] => {
-  const winner = noiseTiebreakSide(localMeta, remoteMeta);
-  const fieldNames = Array.from(
-    new Set([...Object.keys(localChanges), ...Object.keys(remoteChanges)]),
-  );
-  return fieldNames.map((field) => {
-    const localHas = field in localChanges;
-    const remoteHas = field in remoteChanges;
-    let pickedSide: 'local' | 'remote';
-    if (localHas && remoteHas) {
-      // Only NOISE fields can be on both sides (real fields are disjoint).
-      pickedSide = winner;
-    } else if (localHas) {
-      pickedSide = 'local';
-    } else {
-      pickedSide = 'remote';
-    }
-    return {
-      field,
-      localVal: localChanges[field],
-      remoteVal: remoteChanges[field],
-      localChanged: localHas,
-      remoteChanged: remoteHas,
-      pickedSide,
-    };
+    const ids = getOpEntityIds(op);
+    const keys = [
+      ...Object.keys(payload.actionPayload),
+      ...(Array.isArray(payload.clearedFields) ? payload.clearedFields : []),
+    ];
+    return (
+      ids.length === 1 &&
+      ids[0] === entityId &&
+      !SYNC_TIME_SPENT_FIELDS.some((field) => keys.includes(field))
+    );
   });
+
+/**
+ * Opaque single-task actions admitted as writing no time field of the task
+ * they declare (#10378). `planTasksForToday` writes `dueDay`, `remindAt`,
+ * `dueWithTime`, the Today order and planner days; its spec runs the reducer
+ * to prove it. Every other opaque op may write time (`roundTimeSpentForDay`
+ * does) and keeps whole-entity LWW.
+ */
+export const TIMELESS_OPAQUE_TASK_ACTIONS: ReadonlySet<string> = new Set<string>([
+  ActionType.TASK_SHARED_PLAN_FOR_TODAY,
+]);
+
+/**
+ * True when `op` provably writes no time field of task `entityId`: a
+ * non-DELETE op declaring only that task, neither an LWW row nor an additive
+ * time op, that reads as fields none of which is a time field, or is an
+ * opaque action admitted in `TIMELESS_OPAQUE_TASK_ACTIONS`.
+ */
+export const writesNoTaskTime = (
+  op: Operation,
+  payloadKey: string,
+  entityId: string,
+): boolean => {
+  const ids = getOpEntityIds(op);
+  if (
+    op.entityType !== 'TASK' ||
+    op.opType === OpType.Delete ||
+    isLwwUpdatePayload(op.payload) ||
+    isAdditiveTimeOp(op) ||
+    ids.length !== 1 ||
+    ids[0] !== entityId
+  ) {
+    return false;
+  }
+  if (isOpaqueChangeOp(op, payloadKey, entityId)) {
+    return TIMELESS_OPAQUE_TASK_ACTIONS.has(op.actionType);
+  }
+  const changes = extractOpChanges(op, payloadKey, entityId);
+  return !SYNC_TIME_SPENT_FIELDS.some((field) => field in changes);
 };
+
+/**
+ * True when `deltaSide` is only `syncTimeSpent` deltas and every op of
+ * `otherSide` is a delta too or writes no time field of the task
+ * (`writesNoTaskTime`), including timeless patch rows checked by their keys.
+ * The deltas add to whatever the other side leaves, so
+ * both apply as they are. Unlike `isDisjointMergeEligible` this admits an
+ * other side holding a timeless opaque op: tracking an unscheduled task emits
+ * `planTasksForToday` beside its delta, which made two devices' concurrent
+ * time on one task lose to whole-entity LWW (#10378).
+ */
+const isTimeDeltaBesideTimelessOps = (
+  deltaSide: Operation[],
+  otherSide: Operation[],
+  { payloadKey, entityId }: { payloadKey: string; entityId: string },
+): boolean =>
+  deltaSide.length > 0 &&
+  otherSide.length > 0 &&
+  deltaSide.every(isSyncTimeSpentDelta) &&
+  otherSide.every(
+    (op) =>
+      isSyncTimeSpentDelta(op) ||
+      isTimeDeltaBesideTimelessRow({
+        localOps: deltaSide,
+        remoteOps: [op],
+        entityId,
+      }) ||
+      writesNoTaskTime(op, payloadKey, entityId),
+  );
+
+const isSyncTimeSpentDelta = (op: Operation): boolean =>
+  op.actionType === ActionType.TIME_TRACKING_SYNC_TIME_SPENT;

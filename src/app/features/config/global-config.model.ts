@@ -67,6 +67,9 @@ export type MiscConfig = Readonly<{
   overlayIndicatorOpacity?: number; // Deprecated – moved to taskWidget.opacity
 }>;
 
+/** How a task's priority is drawn next to its title. */
+export type TaskPriorityIconPreset = 'chevrons' | 'numbers';
+
 export type TasksConfig = Readonly<{
   isAutoMarkParentAsDone: boolean;
   isAutoAddWorkedOnToToday: boolean;
@@ -75,6 +78,12 @@ export type TasksConfig = Readonly<{
   isMarkdownFormattingInNotesEnabled: boolean;
   defaultProjectId?: string | null | false; // allow 'false' because of #569
   notesTemplate: string;
+  /**
+   * A `TaskPriorityIconPreset`, typed as an opaque string so a preset added by a
+   * newer client does not fail validation (and get reset) on older ones. Optional:
+   * older data lacks it; readers fall back to `'chevrons'` for missing/unknown.
+   */
+  priorityIconPreset?: string;
 }>;
 
 export type ShortSyntaxConfig = Readonly<{
@@ -221,10 +230,9 @@ export type SyncConfig = Readonly<{
   isEncryptionEnabled?: boolean;
   isCompressionEnabled?: boolean;
   /**
-   * SPAP-11: opt-in "Surgical sync" — store file-based sync as a small always-read
-   * ops file (`sync-ops.json`) plus a rarely-rewritten snapshot (`sync-state.json`)
-   * for O(delta) syncs. Default OFF. One-way per sync folder: once a client with
-   * this ON migrates the folder, other clients must also turn it on to continue.
+   * Absent: use the remote format, or EMPTY_FOLDER_SYNC_FORMAT (v2) for an empty folder.
+   * false: retain legacy v2 behavior. true: explicitly migrate v2 to v3.
+   * The migration is one-way per sync folder.
    */
   isUseSplitSyncFiles?: boolean;
   syncProvider: SyncProviderId | null;
