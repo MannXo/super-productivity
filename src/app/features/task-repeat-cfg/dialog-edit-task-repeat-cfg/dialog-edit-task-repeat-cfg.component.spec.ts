@@ -1011,8 +1011,8 @@ describe('DialogEditTaskRepeatCfgComponent', () => {
       startDate: '2026-06-01',
       lastTaskCreationDay: '2026-06-09',
     };
-    const formatDay = (day: number): string =>
-      new Date(2026, 5, day).toLocaleDateString('en-US', {
+    const formatDay = (day: number, month = 5, year = 2026): string =>
+      new Date(year, month, day).toLocaleDateString('en-US', {
         weekday: 'short',
         year: 'numeric',
         month: 'short',
@@ -1078,6 +1078,77 @@ describe('DialogEditTaskRepeatCfgComponent', () => {
 
       expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
       expect(instantCalls.at(-1)!.params).toEqual({ date: formatDay(12) });
+    });
+
+    it('passes over a skipped monthly instance', async () => {
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          repeatCycle: 'MONTHLY',
+          startDate: '2026-05-10',
+          lastTaskCreationDay: '2026-05-10',
+          deletedInstanceDates: ['2026-06-10'],
+        },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
+      expect(instantCalls.at(-1)!.params).toEqual({
+        date: formatDay(10, 6),
+      });
+    });
+
+    it('passes over consecutive skipped monthly instances', async () => {
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          repeatCycle: 'MONTHLY',
+          startDate: '2026-05-10',
+          lastTaskCreationDay: '2026-05-10',
+          deletedInstanceDates: ['2026-06-10', '2026-07-10'],
+        },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
+      expect(instantCalls.at(-1)!.params).toEqual({
+        date: formatDay(10, 7),
+      });
+    });
+
+    it('keeps the completion-date anchor when passing over a skipped month', async () => {
+      // Skipping does not move lastTaskCreationDay, so the May 31 anchor holds
+      // and the month after a skipped June 30 is July 31, not July 30.
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          repeatCycle: 'MONTHLY',
+          repeatFromCompletionDate: true,
+          startDate: '2026-01-15',
+          lastTaskCreationDay: '2026-05-31',
+          deletedInstanceDates: ['2026-06-30'],
+        },
+      });
+
+      component.nextOccurrenceText();
+      expect(instantCalls.at(-1)!.params).toEqual({
+        date: formatDay(31, 6),
+      });
+    });
+
+    it('passes over a skipped yearly instance', async () => {
+      const component = await setup({
+        repeatCfg: {
+          ...dailyCfg,
+          repeatCycle: 'YEARLY',
+          startDate: '2025-06-10',
+          lastTaskCreationDay: '2025-06-10',
+          deletedInstanceDates: ['2026-06-10'],
+        },
+      });
+
+      expect(component.nextOccurrenceText()).toBe(T.F.TASK_REPEAT.D_EDIT.NEXT_OCCURRENCE);
+      expect(instantCalls.at(-1)!.params).toEqual({
+        date: formatDay(10, 5, 2027),
+      });
     });
 
     it('shows no date while a due instance waits for the current one to be done', async () => {

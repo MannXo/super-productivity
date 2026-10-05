@@ -59,6 +59,7 @@ import { isValidSplitTime } from '../../../util/is-valid-split-time';
 import { DateService } from '../../../core/date/date.service';
 import { MAT_SELECT_CONFIG } from '@angular/material/select';
 import { getNextRepeatOccurrence } from '../store/get-next-repeat-occurrence.util';
+import { getEffectiveRepeatStartDate } from '../store/get-effective-repeat-start-date.util';
 import { getNewestPossibleDueDate } from '../store/get-newest-possible-due-date.util';
 import { SCHEDULE_AFFECTING_FIELDS } from '../store/schedule-affecting-fields.const';
 
@@ -97,15 +98,26 @@ const NEXT_OCCURRENCE_FIELDS: (keyof TaskRepeatCfgCopy)[] = [
 
 // The next occurrence task creation would actually produce: it passes over
 // skipped instances (deletedInstanceDates), so the preview must too.
+// Monthly and yearly only move past a period's anchor once lastTaskCreationDay
+// reaches it, so that is what each step advances. The start date is pinned
+// because repeatFromCompletionDate would otherwise re-anchor on the skipped day.
 const getNextCreatedOccurrence = (cfg: TaskRepeatCfg, fromDate: Date): Date | null => {
   const skipped = cfg.deletedInstanceDates ?? [];
+  const anchored: TaskRepeatCfg = {
+    ...cfg,
+    startDate: getEffectiveRepeatStartDate(cfg),
+    repeatFromCompletionDate: false,
+  };
   let next = getNextRepeatOccurrence(cfg, fromDate);
   for (
     let i = 0;
     next && i < skipped.length && skipped.includes(getDbDateStr(next));
     i++
   ) {
-    next = getNextRepeatOccurrence(cfg, next);
+    next = getNextRepeatOccurrence(
+      { ...anchored, lastTaskCreationDay: getDbDateStr(next) },
+      next,
+    );
   }
   return next;
 };
