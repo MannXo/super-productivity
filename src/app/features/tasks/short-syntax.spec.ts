@@ -476,6 +476,38 @@ describe('shortSyntax', () => {
       expect(r).toBeUndefined();
     });
 
+    // #10217: an earlier "!" that is not a deadline trigger must not hide a later one
+    it('should parse a later deadline token after an earlier "!" in the title', async () => {
+      const t = {
+        ...TASK,
+        title: 'wow! !tomorrow',
+      };
+      const now = new Date('2026-06-01T10:00:00'); // Mon Jun 1 2026
+      const r = await shortSyntax(t, DEADLINE_CONFIG, undefined, undefined, now);
+
+      expect(r?.taskChanges.title).toBe('wow!');
+      expect(r?.taskChanges.deadlineWithTime).toBeDefined();
+      const deadlineDate = new Date(r?.taskChanges.deadlineWithTime as number);
+      expect(deadlineDate.getFullYear()).toBe(2026);
+      expect(deadlineDate.getMonth()).toBe(5); // June
+      expect(deadlineDate.getDate()).toBe(2);
+    });
+
+    it('should strip the matched deadline token, not an earlier identical one', async () => {
+      const t = {
+        ...TASK,
+        title: 'Call!5 !5',
+      };
+      const now = new Date('2026-06-01T10:00:00');
+      const r = await shortSyntax(t, DEADLINE_CONFIG, undefined, undefined, now);
+
+      expect(r?.taskChanges.title).toBe('Call!5');
+      expect(r?.taskChanges.deadlineWithTime).toBeDefined();
+      const deadlineDate = new Date(r?.taskChanges.deadlineWithTime as number);
+      expect(deadlineDate.getDate()).toBe(2); // 05:00 has passed today -> tomorrow
+      expect(deadlineDate.getHours()).toBe(5);
+    });
+
     it('should not parse deadline syntax for issue tasks', async () => {
       const t = {
         ...TASK,

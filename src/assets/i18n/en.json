@@ -106,7 +106,7 @@
     },
     "GO_FURTHER": {
       "TITLE": "Go further",
-      "NOTES": "There is much more to discover!\n\n**App Features** (in Settings) — Enable integrations, habits, and other features. Go to **Settings → App Features** to see what's available.\n\n**Boards** — Visualize your tasks in customizable Kanban-style boards. Enable them in **App Features**, then find them in the **sidebar menu**.\n\n**Schedule** — Plan your day by scheduling tasks at specific times. Drag tasks onto the **Schedule** view in the sidebar to organize your timeline.\n\n**Integrations** — Once enabled in App Features, import tasks from Jira, GitHub, GitLab, Gitea, OpenProject, CalDAV, and many more. You can also integrate your calendar. Configure them in the **Issue Provider Panel**.\n\n**Habits** — Track recurring habits and routines. Find them in the **sidebar menu** once enabled.\n\n**Plugins** — Add features like the Procrastination Buster, Automations, or Voice Reminders. Go to **Settings → Plugins**.\n\n**Customize** — Themes, dark mode, keyboard shortcuts, language, and productivity helpers are all in **Settings**."
+      "NOTES": "There is much more to discover!\n\n**App Features** (in Settings) — Enable integrations, habits, and other features. Go to **Settings → App Features** to see what's available.\n\n**Boards** — Visualize your tasks in customizable Kanban-style boards. Enable them in **App Features**, then find them in the **sidebar menu**.\n\n**Schedule** — Plan your day by scheduling tasks at specific times. Enable it in **App Features**, then drag tasks onto the **Schedule** view in the sidebar to organize your timeline.\n\n**Integrations** — Once enabled in App Features, import tasks from Jira, GitHub, GitLab, Gitea, OpenProject, CalDAV, and many more. You can also integrate your calendar. Configure them in the **Issue Provider Panel**.\n\n**Habits** — Track recurring habits and routines. Find them in the **sidebar menu** once enabled.\n\n**Focus mode & Finish Day** — Work in distraction-free focus sessions and wrap up your day with a short review. Enable them in **App Features**.\n\n**Plugins** — Add features like the Procrastination Buster, Automations, or Voice Reminders. Go to **Settings → Plugins**.\n\n**Customize** — Themes, dark mode, keyboard shortcuts, language, and productivity helpers are all in **Settings**."
     }
   },
   "F": {
@@ -555,7 +555,8 @@
         "OAUTH_FAILED_WITH_DETAIL": "Authentication failed: {{detail}}",
         "REMOTE_ISSUE_DELETED": "Remote issue was deleted. Delete linked task \"{{taskTitle}}\"?",
         "REMOTE_ISSUE_DELETED_WITH_TIME": "Remote issue was deleted but task \"{{taskTitle}}\" has tracked time. Delete anyway?",
-        "TWO_WAY_SYNC_PUSH_FAILED": "Two-way sync push failed: {{errorMsg}}"
+        "TWO_WAY_SYNC_PUSH_FAILED": "Two-way sync push failed: {{errorMsg}}",
+        "POST_TIME_SUCCESS": "{{providerName}}: Successfully created time entry for {{issueTitle}}"
       },
       "TWO_WAY_SYNC": {
         "AUTO_CREATE_ISSUES": "Auto-create issues for new tasks",
@@ -591,6 +592,15 @@
         "RELOAD_OPTIONS": "Reload Options",
         "SETUP_TITLE": "Setup {{title}} Config",
         "TEST_CONNECTION": "Test Connection"
+      },
+      "DIALOG_TRACK_TIME": {
+        "ACTIVITY": "Activity",
+        "INVALID_DATE": "The entered value is not a date!",
+        "POST_TIME": "Post Time",
+        "STARTED": "Started",
+        "SUBMIT_TIME_FOR": "Submit time to {{providerName}} for",
+        "TIME_SPENT": "Time Spent",
+        "TITLE": "{{providerName}}: Submit Worklog"
       }
     },
     "ISSUE_PANEL": {
@@ -747,8 +757,14 @@
         "DAYS_WORKED": "Days worked",
         "FOCUS_SESSION_TRENDS": "Focus sessions over time",
         "GLOBAL_METRICS": "Global Metrics",
+        "HEATMAP_SHARE_FAILED": "Failed to share heatmap",
+        "HEATMAP_SHARE_TAGLINE": "{{title}} – With the Super Productivity App",
+        "HEATMAP_SHARED_TO_DEVICE": "Heatmap saved to device storage",
+        "HEATMAP_SHARED_TO_PATH": "Heatmap saved to {{path}}",
         "NO_ADDITIONAL_DATA_YET": "No additional data collected yet. Use the form on the daily summary \"Evaluation\" panel to do so.",
         "PRODUCTIVITY_BREAKDOWN_OVER_TIME": "Productivity & Sustainability over time",
+        "SHARE_HEATMAP": "Share heatmap",
+        "SHARE_STATS": "Share your productivity stats",
         "SIMPLE_CLICK_COUNTERS_OVER_TIME": "Click Counters over time",
         "SIMPLE_COUNTERS": "Simple Counters & Habit Tracking",
         "SIMPLE_STOPWATCH_COUNTERS_OVER_TIME": "Stopwatch Counters over time",
@@ -817,33 +833,6 @@
         "TITLE": "Reflection Note"
       }
     },
-    "NEXTCLOUD_DECK": {
-      "FORM": {
-        "BASE_URL": "Nextcloud Base URL",
-        "FILTER_BY_ASSIGNEE": "Only import cards assigned to me",
-        "IS_TRANSITION_ISSUES_ENABLED": "Sync completion status and title back to Nextcloud Deck",
-        "PASSWORD": "Your Nextcloud app password",
-        "POLL_INTERVAL_MINUTES": "Poll interval (minutes)",
-        "TITLE_TEMPLATE": "Task title template",
-        "TITLE_TEMPLATE_DESCRIPTION": "Variables: {CARD_TITLE}, {BOARD}, {COLUMN}, {ID}, {LABELS}. Example: [{BOARD}: {COLUMN}] {CARD_TITLE}. Leave empty for card title only.",
-        "USERNAME": "Your Nextcloud username"
-      },
-      "FORM_SECTION": {
-        "HELP": "Configure your Nextcloud Deck integration to import cards as tasks. Use an app password for authentication."
-      },
-      "ISSUE_CONTENT": {
-        "ASSIGNED_USERS": "Assigned Users",
-        "DECK_DESCRIPTION": "Deck Description",
-        "LABELS": "Labels",
-        "STACK": "Stack"
-      },
-      "S": {
-        "BOARD_NOT_FOUND": "Nextcloud Deck: Board not found",
-        "CARD_NOT_FOUND": "Nextcloud Deck: Card \"{{issueId}}\" seems to be deleted on server.",
-        "ERR_CREDENTIALS_MISSING": "Enter Nextcloud URL, username, and password first.",
-        "ERR_LOAD_BOARDS": "Failed to load Deck boards! Check your credentials."
-      }
-    },
     "NOTE": {
       "D_DRAFT_CONFLICT": {
         "KEEP_SAVED": "Keep saved version",
@@ -852,6 +841,7 @@
       },
       "D_FULLSCREEN": {
         "CONFIRM_DISCARD_MSG": "You have unsaved changes. Discard them?",
+        "CONFIRM_SAVE_BEFORE_OPENING_NEW_TASK": "Save the current note before opening a new task?",
         "TOOLBAR": {
           "BOLD": "Bold",
           "BULLET_LIST": "Bulleted list",
@@ -1102,44 +1092,6 @@
       "ADD_SUBFOLDER": "Add subfolder",
       "ADD_PROJECT": "Add project"
     },
-    "REDMINE": {
-      "DIALOG_TRACK_TIME": {
-        "ACTIVITY": "Activity",
-        "INVALID_DATE": "The entered value is not a date!",
-        "POST_TIME": "Post Time",
-        "STARTED": "Started",
-        "SUBMIT_TIME_FOR": "Submit time to Redmine for",
-        "TIME_SPENT": "Time Spent",
-        "TITLE": "Redmine: Submit Worklog"
-      },
-      "FORM": {
-        "API_KEY": "API access key",
-        "HOST": "Host (e.g. https://redmine.org)",
-        "IS_SHOW_TIME_TRACKING_DIALOG": "Show time tracking dialog to report to Redmine",
-        "IS_SHOW_TIME_TRACKING_DIALOG_DESCRIPTION": "Requires time tracking module to be enabled for Redmine project",
-        "IS_SHOW_TIME_TRACKING_DIALOG_FOR_EACH_SUB_TASK": "Show time tracking dialog when subtasks are completed",
-        "PROJECT_ID": "Project Identifier (optional)",
-        "PROJECT_ID_DESCRIPTION": "Can be found as part of the URL when viewing the project in a web browser. Leave empty to search across the whole Redmine instance.",
-        "SCOPE": "Scope",
-        "SCOPE_ALL": "All",
-        "SCOPE_ASSIGNED": "Assigned to me",
-        "SCOPE_CREATED": "Created by me"
-      },
-      "FORM_SECTION": {
-        "HELP": "<p>Here you can configure Super Productivity to list open Redmine (either its the online version or a self-hosted instance) issues for a specific project in the task creation panel in the daily planning view. They will be listed as suggestions and will provide a link to the issue as well as more information about it.</p><p>In addition you can automatically import all open issues.</p>",
-        "TITLE": "Redmine"
-      },
-      "ISSUE_CONTENT": {
-        "AUTHOR": "Author",
-        "DESCRIPTION": "Description",
-        "MARK_AS_CHECKED": "Mark updates as checked",
-        "PRIORITY": "Priority",
-        "STATUS": "Status"
-      },
-      "S": {
-        "POST_TIME_SUCCESS": "Redmine: Successfully created time entry for {{issueTitle}}"
-      }
-    },
     "REFLECTION_NOTE": {
       "ACTION_DISMISS": "Dismiss",
       "MSG": "Reflection Note: ({{date}}): {{content}}"
@@ -1197,9 +1149,9 @@
     },
     "SEARCH_BAR": {
       "INCLUDE_COMPLETED": "Include completed and archived tasks",
-      "INFO": "Start typing to search for tasks or notes",
-      "NO_RESULTS": "No tasks or notes found matching your search",
-      "PLACEHOLDER": "Search for task, task notes or project notes"
+      "INFO": "Start typing to search for tasks, notes, projects or tags",
+      "NO_RESULTS": "No tasks, notes, projects or tags found matching your search",
+      "PLACEHOLDER": "Search for tasks, notes, projects or tags"
     },
     "SIMPLE_COUNTER": {
       "D_CONFIRM_REMOVE": {
@@ -1259,57 +1211,7 @@
       "BTN_SHOW_DEVICES": "Show Connected Devices",
       "BTN_SYNC_NOW": "Sync Now",
       "C": {
-        "FORCE_UPLOAD": "This will REPLACE all data on the server and on every other device with this device's local copy. Any unsynced changes on those devices will be permanently lost. Continue?",
-        "DECRYPT_OVERWRITE": "This will REPLACE the encrypted data on the server with this device's local copy and re-encrypt it with the new password. All other devices will need to re-enter the password and download the replaced data. Any unsynced changes on those devices will be permanently lost. Continue?"
-      },
-      "CONFLICT_REVIEW": {
-        "PAGE_TITLE": "Sync Conflicts",
-        "PAGE_SUBTITLE": "Edits that were auto-resolved during sync. Review them and, if needed, switch to the other version.",
-        "CONFIG_LINK": "Review sync conflicts",
-        "BADGE_TOOLTIP": "{{count}} unreviewed sync conflict(s)",
-        "BANNER_MSG": "{{count}} sync conflict(s) auto-resolved ({{remoteWins}} remote, {{localWins}} local won)",
-        "BANNER_REVIEW": "Review",
-        "TAB_UNREVIEWED": "Unreviewed ({{count}})",
-        "TAB_HISTORY": "History",
-        "EMPTY_UNREVIEWED": "No conflicts to review.",
-        "EMPTY_HISTORY": "No conflict history yet.",
-        "GROUP_TASK": "Tasks",
-        "GROUP_PROJECT": "Projects",
-        "GROUP_TAG": "Tags",
-        "GROUP_NOTE": "Notes",
-        "GROUP_OTHER": "Other",
-        "COL_FIELD": "Field",
-        "COL_LOCAL": "Local",
-        "COL_REMOTE": "Remote",
-        "COL_CURRENT": "Current (now)",
-        "WINNER_LOCAL": "Local won",
-        "WINNER_REMOTE": "Remote won",
-        "WINNER_MERGED": "Merged",
-        "REASON_NEWER": "Newer edit won",
-        "REASON_TIE": "Tie, remote won",
-        "REASON_DELETE_WINS": "Delete won",
-        "REASON_DELETE_LOST": "Delete overridden by edit",
-        "REASON_DISJOINT_MERGE": "Auto-merged",
-        "REASON_NOISE": "No content change",
-        "REASON_CLOCK_CORRUPTION": "Clock corruption suspected",
-        "STATUS_UNREVIEWED": "Unreviewed",
-        "STATUS_KEPT": "Kept",
-        "STATUS_FLIPPED": "Flipped",
-        "STATUS_INFO": "Info",
-        "THIS_DEVICE": "This device",
-        "DEVICE_LABEL": "Device {{id}}",
-        "MERGED_FIELD_CHIP": "{{field}} ← {{side}}",
-        "SIDE_LOCAL": "local",
-        "SIDE_REMOTE": "remote",
-        "ACTION_KEEP": "Keep",
-        "ACTION_FLIP": "Flip",
-        "BULK_KEEP_ALL": "Keep all",
-        "BULK_FLIP_LOCAL": "Flip all → Local",
-        "BULK_FLIP_REMOTE": "Flip all → Remote",
-        "FLIP_UNSUPPORTED": "Flipping is not supported for this item type yet.",
-        "FLIP_DONE": "Applied the other version.",
-        "STALE_CONFIRM": "\"{{title}}\" changed since this conflict was resolved. Flipping will overwrite those newer edits. Continue?",
-        "WINNING_SIDE": "Kept"
+        "FORCE_UPLOAD": "This will REPLACE all data on the server and on every other device with this device's local copy. Any unsynced changes on those devices will be permanently lost. Continue?"
       },
       "D_AUTH_CODE": {
         "FOLLOW_LINK": "Please open the following link and copy the auth code provided there into the input field below.",
@@ -1360,11 +1262,10 @@
         "UNKNOWN_ERROR": "Unknown Sync Error: {{err}}"
       },
       "D_DECRYPT_ERROR": {
-        "BTN_OVER_WRITE_REMOTE": "Overwrite Server & Other Devices",
         "CHANGE_PW_AND_DECRYPT": "Retry Decrypt",
         "P1": "Your remote data is encrypted and decryption failed.",
         "P2_FORGOT_PW": "If you <strong>forgot your password</strong>, enter the correct password and click \"Retry Decrypt\".",
-        "P3_PW_CHANGED": "If you <strong>changed your password on another device</strong>, enter your new password and click <strong>Overwrite Server & Other Devices</strong>. ⚠️ This is destructive: it replaces ALL data on the server and on your other devices with this device's local copy. Any unsynced changes on those devices will be lost.",
+        "P3_START_OVER": "If you cannot recover the password, leave the sync server as it is \u2014 your data there stays intact. To erase it and start over from this device, close this window and use <strong>Force Overwrite</strong> in Settings \u2192 Sync & Backup \u2192 Sync.",
         "PASSWORD": "Password",
         "TITLE": "Decryption Failed"
       },
@@ -1544,7 +1445,7 @@
         "L_MANUAL_SYNC_ONLY": "Only sync manually (disable automatic sync)",
         "L_SYNC_INTERVAL": "Sync interval",
         "L_SYNC_PROVIDER": "Sync provider",
-        "L_USE_SPLIT_SYNC_FILES": "Surgical sync (experimental) – Faster syncing using a split ops/snapshot file layout. Once enabled, all devices syncing this folder must also enable it.",
+        "L_USE_SPLIT_SYNC_FILES": "Surgical sync – Faster syncing using a split ops/snapshot file layout. Turning it on upgrades this sync folder permanently. Other devices may need to turn it on too; versions before 18.14 cannot sync an upgraded folder.",
         "LOCAL_FILE": {
           "INFO_TEXT": "<strong>Warning:</strong> Do <strong>not</strong> use file syncing tools like Syncthing, Resilio, or similar to sync this folder between devices — they <strong>will</strong> cause data corruption and conflicts. For multi-device sync, use SuperSync, Nextcloud, or Dropbox instead.",
           "L_SYNC_FILE_PATH_PERMISSION_VALIDATION": "Needs file access permission",
@@ -1674,6 +1575,7 @@
         "DECRYPTION_FAILED": "Failed to decrypt synced data. Please check your encryption password.",
         "DEFERRED_ACTION_FAILED": "Some changes made during sync could not be saved yet. The next sync will retry; keep the app open.",
         "DEFERRED_ACTION_PERMANENT_FAILED": "A change could not be saved and sync is paused. Reload to restore the last saved state.",
+        "DEFERRED_ACTIONS_STUCK": "Sync seems stuck. Your recent changes are waiting and have not been saved yet. Reloading the app recovers sync but discards them.",
         "DISABLE_ENCRYPTION_FAILED": "Failed to disable encryption: {{message}}",
         "ENABLE_ENCRYPTION_FAILED": "Failed to enable encryption: {{message}}",
         "ENCRYPTION_PASSWORD_REQUIRED": "Encrypted data received but no encryption password is configured. Please set your encryption password in sync settings.",
@@ -1735,7 +1637,6 @@
         "SYNC_DATA_RECOVERED_FROM_BACKUP": "Recovered sync data from backup after the main file could not be read.",
         "SYNC_VALIDATION_FAILED": "State validation failed after sync. Some data may be inconsistent.",
         "TIMEOUT_ERROR": "Sync operation timed out. {{suggestion}}",
-        "TOO_MANY_OPS_TO_DOWNLOAD": "Too many sync operations to download. Some changes may be missing.",
         "UNKNOWN_ERROR": "Unknown Sync Error: {{err}}",
         "UNSUPPORTED_MULTI_ENTITY_CONFLICT": "Sync stopped because some changes cannot be merged safely. Choose Resolve… or sync manually to choose which version to keep. This replaces all data on one side. Please report this code: {{details}}",
         "UPLOAD_ERROR": "Unknown Upload Error (Settings correct?): {{err}}",
@@ -1959,7 +1860,10 @@
         "ADD_TIME": "Add time",
         "REMIND_AT": "Remind at",
         "REMOVE_DEADLINE": "Remove deadline",
+        "RO_1D": "1 day before",
         "RO_1H": "1 hour before",
+        "RO_1W": "1 week before",
+        "RO_3D": "3 days before",
         "RO_5M": "5 minutes before",
         "RO_10M": "10 minutes before",
         "RO_15M": "15 minutes before",
@@ -2200,6 +2104,12 @@
         "ADVANCED_CFG": "Advanced configuration",
         "EDIT": "Edit Recurring Task Config",
         "HEATMAP_LABEL": "Activity",
+        "INHERITED_SUBTASKS": "New instances get these subtasks:",
+        "NEXT_OCCURRENCE": "Next new instance: {{date}}",
+        "NEXT_OCCURRENCE_AFTER_COMPLETION": "A new instance is created as soon as the current one is done",
+        "NEXT_OCCURRENCE_FROM_COMPLETION": "Next new instance: {{date}}, later if the current one is completed late",
+        "NEXT_OCCURRENCE_UNSAVED": "The date of the next new instance updates after saving",
+        "NEXT_OCCURRENCE_WAIT_FOR_COMPLETION": "Next new instance: {{date}}, if the current one is done by then",
         "TAG_LABEL": "Tags",
         "TIME_SPENT_THIS_MONTH": "This month",
         "TIME_SPENT_THIS_WEEK": "This week",
@@ -2474,6 +2384,7 @@
     },
     "EXPORT_DATA": "Export Data",
     "IMPORT_FROM_FILE": "Import from File",
+    "IMPORT_FROM_TICKTICK": "Import from TickTick",
     "IMPORT_FROM_TODOIST": "Import from Todoist",
     "IMPORT_FROM_URL": "Import from URL",
     "IMPORT_FROM_URL_DIALOG_DESCRIPTION": "Please enter the full URL of the Super Productivity backup JSON file to import.",
@@ -2483,9 +2394,11 @@
     "PRIVACY_EXPORT_DESCRIPTION": "Export anonymized data (to send to contact@super-productivity.com for debugging)",
     "S_BACKUP_DOWNLOADED": "Backup exported",
     "S_ERR_IMPORT_FAILED": "Importing data failed",
+    "S_ERR_IMPORT_UNREPAIRABLE": "Import failed: this backup contains data that can't be repaired. Please try an older backup, and export your logs and report the issue.",
     "S_ERR_INVALID_DATA": "Import failed: Invalid JSON",
     "S_ERR_INVALID_URL": "Import failed: Invalid URL provided",
     "S_ERR_NETWORK": "Import failed: Network error while fetching data from URL",
+    "S_ERR_TICKTICK_IMPORT_OPEN": "Could not open the TickTick importer",
     "S_ERR_TODOIST_IMPORT_OPEN": "Could not open the Todoist importer",
     "S_IMPORT_FROM_URL_ERR_DECODE": "Error: Could not decode the URL parameter for import. Please ensure it is correctly formatted.",
     "URL_PLACEHOLDER": "Enter URL to import from"
@@ -2928,6 +2841,9 @@
       "IS_MARKDOWN_FORMATTING_IN_NOTES_ENABLED": "Enable Markdown formatting in task notes",
       "IS_TRAY_SHOW_CURRENT": "Show current task in the tray / status menu (macOS/Windows only)",
       "NOTES_TEMPLATE": "Task description template",
+      "PRIORITY_ICON_PRESET": "Priority icons",
+      "PRIORITY_ICON_PRESET_CHEVRONS": "Chevrons",
+      "PRIORITY_ICON_PRESET_NUMBERS": "Numbers",
       "TITLE": "Tasks"
     },
     "TIME_TRACKING": {
@@ -2997,6 +2913,14 @@
   "GPB": {
     "JIRA_LOAD_ISSUE": "Jira: Load issue data...",
     "UNKNOWN": "Loading remote data"
+  },
+  "HEATMAP": {
+    "DAY_TOOLTIP": {
+      "ONE": "{{date}}: {{taskCount}} task, {{timeSpent}}",
+      "OTHER": "{{date}}: {{taskCount}} tasks, {{timeSpent}}"
+    },
+    "LEGEND_LESS": "Less",
+    "LEGEND_MORE": "More"
   },
   "MH": {
     "ADD_NEW_TASK": "Add new Task",
@@ -3091,35 +3015,16 @@
     "TASK_MARKED_DONE": "Task marked as done"
   },
   "ONBOARDING": {
-    "TITLE": "How do you want to use Super Productivity?",
-    "SUBTITLE": "Pick a setup that matches your workflow. You can always change this later in Settings.",
-    "PRIVACY_HINT": "Your data stays securely on your device unless you choose to set up sync.",
-    "SYNC_CTA": "Already using Super Productivity on another device?",
-    "SYNC_CTA_LINK": "Set up sync",
-    "PRESETS": {
-      "SIMPLE_TODO": {
-        "TITLE": "Simple Todo List",
-        "DESCRIPTION": "A clean task manager with projects, tags, and notes. No extras."
-      },
-      "TIME_TRACKER": {
-        "TITLE": "Time Tracker",
-        "DESCRIPTION": "Track how long tasks take. Great for billing hours or understanding where your time goes."
-      },
-      "PRODUCTIVITY_PRO": {
-        "TITLE": "Productivity Suite",
-        "DESCRIPTION": "Plan your day, build habits, focus deeply, and track your time. All in one place."
-      }
-    },
     "HINTS": {
       "CREATE_TASK": "Click + to add your first task",
       "CREATE_TASK_TOUCH": "Tap + to add your first task",
-      "EXPLORE": "Feel free to click around and explore! You can find help in the sidebar.",
-      "EXPLORE_TOUCH": "Feel free to explore. You can find help in the sidebar.",
-      "TASK_TAP_TOUCH": "Tap a task to open its details.",
+      "DONE_TITLE": "You're all set",
+      "EXPLORE_INBOX": "Some optional tips are waiting in your Inbox. Try them or delete them, whenever you like.",
+      "GOT_IT": "Got it",
       "TASK_SWIPE_LEFT_TOUCH": "Swipe task left for more actions",
       "TASK_SWIPE_RIGHT_TOUCH": "Swipe task right to mark it as done",
       "OR_PRESS": "or press",
-      "SKIP_ARIA": "Dismiss hint"
+      "SKIP_ARIA": "Close tip"
     }
   },
   "PDS": {
@@ -3262,6 +3167,12 @@
     "MENU_ENTRY_ICON_STRING": "Menu entry icon must be a string",
     "MENU_ENTRY_LABEL_REQUIRED": "Menu entry label is required",
     "MENU_ENTRY_ONCLICK_REQUIRED": "Menu entry onClick handler is required",
+    "TASK_CONTEXT_MENU_ACTIONS": "Plugin actions",
+    "TASK_CONTEXT_MENU_ENTRY_ID_INVALID": "Task context menu entry ID must match [a-z0-9][a-z0-9_-]{0,63}",
+    "TASK_CONTEXT_MENU_ENTRY_LABEL_INVALID": "Task context menu entry label must be 1-{{maxLength}} characters",
+    "TASK_CONTEXT_MENU_ENTRY_ICON_INVALID": "Task context menu entry icon must be a Material icon name",
+    "TASK_CONTEXT_MENU_ENTRY_ONCLICK_REQUIRED": "Task context menu entry onClick handler is required",
+    "TASK_CONTEXT_MENU_ENTRY_TARGET_INVALID": "Task context menu entry showFor must contain TASK or SUBTASK",
     "MIN_VERSION": "Min. Version:",
     "NO_ADDITIONAL_INFO": "No additional information available",
     "NO_CONTENT_PROVIDED": "No content provided",

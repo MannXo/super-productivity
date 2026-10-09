@@ -6,6 +6,7 @@ import {
   expect,
 } from '@playwright/test';
 import { BasePage } from './base.page';
+import { WEBDAV_SYNC_FORMAT } from '../utils/sync-helpers';
 
 type SyncCycleIntent = 'any' | 'read' | 'write';
 
@@ -89,8 +90,9 @@ export class SyncPage extends BasePage {
        */
       encryptAtSetup?: boolean;
     },
-    options: { isReconfigure?: boolean } = {},
+    options: { isReconfigure?: boolean; useProductFormatDefault?: boolean } = {},
   ): Promise<void> {
+    const isUseSplitSyncFiles = config.isUseSplitSyncFiles ?? WEBDAV_SYNC_FORMAT === 'v3';
     // Try entire setup flow up to 2 times (dialog-level retry)
     for (let dialogAttempt = 0; dialogAttempt < 2; dialogAttempt++) {
       if (dialogAttempt > 0) {
@@ -246,15 +248,16 @@ export class SyncPage extends BasePage {
         await this.passwordInput.fill(config.password);
         await this.syncFolderInput.fill(config.syncFolderPath);
 
-        if (config.isUseSplitSyncFiles !== undefined) {
+        if (!options.useProductFormatDefault) {
           await this.expandAdvancedSettings();
           const splitSyncCheckbox = dialog.getByRole('checkbox', {
             name: /Surgical sync/i,
           });
-          await splitSyncCheckbox.setChecked(config.isUseSplitSyncFiles);
-          await expect(splitSyncCheckbox).toBeChecked({
-            checked: config.isUseSplitSyncFiles,
-          });
+          // Exercise an explicit choice even when the default checkbox is unchecked.
+          // This preserves deliberate v2 fixtures when the product default is automatic.
+          await splitSyncCheckbox.setChecked(!isUseSplitSyncFiles);
+          await splitSyncCheckbox.setChecked(isUseSplitSyncFiles);
+          await expect(splitSyncCheckbox).toBeChecked({ checked: isUseSplitSyncFiles });
         }
 
         // Saving a new provider configuration starts the initial sync. Arm the

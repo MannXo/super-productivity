@@ -697,6 +697,8 @@ describe('PlannerTaskComponent', () => {
       const { fixture, component } = create(makeTask(), true);
       scope.appendChild(fixture.nativeElement);
       spyOn(add, 'focus');
+      fixture.nativeElement.focus();
+      expect(document.activeElement).toBe(fixture.nativeElement);
 
       component.onTaskShortcut(shortcutEvent('s'));
       fixture.nativeElement.remove();
@@ -933,7 +935,7 @@ describe('PlannerTaskComponent', () => {
 
   describe('priority indicator', () => {
     it('renders the shared indicator only when the task has a priority', () => {
-      const withPriority = create(makeTask({ priority: 'high' }));
+      const withPriority = create(makeTask({ priority: 3 }));
       expect(
         withPriority.fixture.nativeElement.querySelector('task-priority-indicator'),
       ).toBeTruthy();

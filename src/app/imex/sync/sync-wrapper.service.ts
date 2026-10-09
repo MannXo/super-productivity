@@ -24,7 +24,6 @@ import {
   LegacySyncFormatDetectedError,
   IncompleteRemoteOperationsError,
   PlaintextWhenEncryptionExpectedError,
-  SyncDataCorruptedError,
   UploadRevToMatchMismatchAPIError,
   ForceUploadFailedError,
   ForceUploadPendingOpsError,
@@ -73,6 +72,10 @@ import { devError } from '../../util/dev-error';
 import { alertDialog, confirmDialog } from '../../util/native-dialogs';
 import { UserInputWaitStateService } from './user-input-wait-state.service';
 import { SYNC_WAIT_TIMEOUT_MS } from './sync.const';
+import {
+  isSyncIncompatibleVersionError,
+  SyncIncompatibleVersionNoticeService,
+} from './sync-incompatible-version-notice.service';
 import { SuperSyncStatusService } from '../../op-log/sync/super-sync-status.service';
 import { SuperSyncWebSocketService } from '../../op-log/sync/super-sync-websocket.service';
 import { WsTriggeredDownloadService } from '../../op-log/sync/ws-triggered-download.service';
@@ -101,7 +104,6 @@ export type ForceUploadTriggerSource =
   | 'InvalidFilePrefixError'
   | 'JsonParseError'
   | 'LegacySyncFormatDetectedError'
-  | 'DecryptError'
   | 'unknown';
 
 /**
@@ -127,6 +129,7 @@ export class SyncWrapperService {
 
   private _reminderService = inject(ReminderService);
   private _userInputWaitState = inject(UserInputWaitStateService);
+  private _incompatibleVersionNotice = inject(SyncIncompatibleVersionNoticeService);
   private _superSyncStatusService = inject(SuperSyncStatusService);
   private _superSyncWsService = inject(SuperSyncWebSocketService);
   private _wsDownloadService = inject(WsTriggeredDownloadService);
@@ -625,6 +628,7 @@ export class SyncWrapperService {
           forceFromSeq0: isProviderSwitch || undefined,
           isNeverSynced: isNeverSyncedAtSyncStart,
           fenceEpoch,
+          keepDecryptedPrefix: true,
         },
       );
       // Auth is confirmed working if download didn't throw AuthFailSPError.
@@ -1058,16 +1062,8 @@ export class SyncWrapperService {
           actionStr: T.F.SYNC.S.BTN_FORCE_OVERWRITE,
         });
         return 'HANDLED_ERROR';
-      } else if (error instanceof SyncDataCorruptedError) {
-        // Remote file format version is incompatible (could be older or newer than local).
-        // Do NOT offer force-upload: if remote is newer, overwriting would destroy newer data.
-        // Users should ensure all devices run the same app version.
-        this._providerManager.setSyncStatus('ERROR');
-        this._snackService.open({
-          msg: T.F.SYNC.S.ERROR_SYNC_VERSION_MISMATCH,
-          type: 'ERROR',
-          config: { duration: 12000 },
-        });
+      } else if (isSyncIncompatibleVersionError(error)) {
+        this._incompatibleVersionNotice.show(error);
         return 'HANDLED_ERROR';
       } else if (error instanceof LegacySyncFormatDetectedError) {
         // Remote has v16.x pfapi files (__meta_) but no sync-data.json. Usual cause:
@@ -1644,9 +1640,6 @@ export class SyncWrapperService {
         if (result?.isReSync) {
           this._suppressEncryptionDialogs = false;
           this.sync();
-        } else if (result?.isForceUpload) {
-          this._suppressEncryptionDialogs = false;
-          this.forceUpload('DecryptError');
         } else {
           // User cancelled — suppress future dialogs so they can navigate to settings
           this._suppressEncryptionDialogs = true;
@@ -1674,6 +1667,8 @@ export class SyncWrapperService {
         error instanceof LocalDataConflictError ? error : undefined;
       const unsyncedCount =
         snapshotConflict?.unsyncedCount ?? (await this._opLogStore.getUnsynced()).length;
+      // #9391: LocalDataConflictError w/ 0 pending ops = fresh client w/ store data.
+      const countUnknown = !!snapshotConflict && !unsyncedCount;
       const vcEntry = await this._opLogStore.getVectorClockEntry();
       const localClock = vcEntry?.clock;
       const localLastUpdate = vcEntry?.lastUpdate || Date.now();
@@ -1692,12 +1687,12 @@ export class SyncWrapperService {
           revMap: {},
           crossModelVersion: 1,
           mainModelData: snapshotConflict?.remoteSnapshotState ?? {},
-          isFullData: !!snapshotConflict,
+          isFullData: !!snapshotConflict?.remoteSnapshotState,
           vectorClock: snapshotConflict?.remoteVectorClock,
         },
         local: {
           lastUpdate: localLastUpdate,
-          lastUpdateAction: `${unsyncedCount} local changes pending`,
+          lastUpdateAction: countUnknown ? '?' : `${unsyncedCount} local changes pending`,
           revMap: {},
           crossModelVersion: 1,
           // Op-log errors lack a last-synced timestamp; the dialog shows Never.
@@ -1706,7 +1701,7 @@ export class SyncWrapperService {
           vectorClock: localClock,
           lastSyncedVectorClock: snapshotConflict?.lastSyncedVectorClock ?? null,
         },
-        localUnsyncedOpsCount: unsyncedCount,
+        localUnsyncedOpsCount: countUnknown ? undefined : unsyncedCount,
       };
 
       SyncLog.log('SyncWrapperService: Opening data conflict dialog', {

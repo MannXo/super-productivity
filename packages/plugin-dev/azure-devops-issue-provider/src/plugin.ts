@@ -15,26 +15,9 @@ const API_VERSION = '6.0';
 const DEFAULT_WORK_ITEM_LIMIT = 50;
 const MAX_WORK_ITEM_LIMIT = 200;
 
-// Work item fields fetched for the list views (kept identical to the built-in
-// provider so behavior is unchanged after migration). getById fetches the full
-// work item (no field filter) so it additionally returns System.Description.
-const WORK_ITEM_FIELDS = [
-  'System.Id',
-  'System.Title',
-  'System.WorkItemType',
-  'System.State',
-  'Microsoft.VSTS.Common.Priority',
-  'System.CreatedDate',
-  'System.ChangedDate',
-  'System.AssignedTo',
-  'Microsoft.VSTS.Scheduling.DueDate',
-  'Microsoft.VSTS.Scheduling.TargetDate',
-  'Microsoft.VSTS.Scheduling.StartDate',
-].join(',');
-
 // Azure DevOps "done" state categories. The backlog query excludes
 // Closed/Done/Removed; Resolved is the Agile resolved-but-not-closed state.
-const DONE_STATES = ['closed', 'done', 'removed', 'resolved'];
+const DONE_STATES = ['closed', 'done', 'removed'];
 
 type AzureScope = 'all' | 'created-by-me' | 'assigned-to-me';
 
@@ -171,12 +154,16 @@ const runWiqlAndFetch = async (
     return [];
   }
   const ids = refs.map((r) => r.id).slice(0, limit);
+  // No `fields` filter: naming a field the process template lacks (e.g.
+  // Microsoft.VSTS.Scheduling.DueDate on on-prem Scrum) fails the whole request
+  // with HTTP 400 TF51535. Unfiltered, each item returns just the fields it
+  // has; the mappers treat optional ones (priority, due/target/start date) as
+  // absent. (#9473)
   const res = await http.get<AzureWorkItemsResponse>(
     `${baseUrl}/${cfg.project}/_apis/wit/workitems`,
     {
       params: {
         ids: ids.join(','),
-        fields: WORK_ITEM_FIELDS,
         // eslint-disable-next-line @typescript-eslint/naming-convention
         'api-version': API_VERSION,
       },
@@ -343,6 +330,8 @@ PluginAPI.registerIssueProvider({
     { field: 'priority', label: t('DISPLAY.PRIORITY'), type: 'text', hideEmpty: true },
     { field: 'body', label: t('DISPLAY.DESCRIPTION'), type: 'markdown' },
   ],
+
+  doneStates: DONE_STATES,
 
   // Read-only provider: pull-only mapping drives remote-update detection only.
   fieldMappings: [

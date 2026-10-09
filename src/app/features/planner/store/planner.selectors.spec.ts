@@ -669,6 +669,104 @@ describe('Planner Selectors - selectPlannerDays', () => {
 
     expect(result[0].timeEstimate).toBe(0);
   });
+
+  describe('calendar events spanning or near day boundaries', () => {
+    const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+    const dayDates = ['2026-09-29', '2026-09-30', '2026-10-01', '2026-10-02'];
+
+    const getDaysWithEvent = (
+      calEv: ScheduleFromCalendarEvent,
+      startOfNextDayDiffMs: number,
+    ): string[] => {
+      const selector = fromSelectors.selectPlannerDays(
+        dayDates,
+        [],
+        [],
+        [{ items: [calEv] }],
+        [],
+        today,
+      );
+      const result = selector.projector(
+        createTasksMapFromTasksArray([]),
+        emptyPlannerState,
+        defaultScheduleConfig,
+        startOfNextDayDiffMs,
+      );
+      return result
+        .filter(
+          (day) =>
+            day.allDayEvents.some((ev) => ev.id === calEv.id) ||
+            day.scheduledIItems.some((item) => item.id === calEv.id),
+        )
+        .map((day) => day.dayDate);
+    };
+
+    it('should keep an all-day event on its date when a start-of-next-day offset is set', () => {
+      const days = getDaysWithEvent(
+        {
+          id: 'birthday',
+          calProviderId: 'provider-1',
+          issueProviderKey: 'ICAL',
+          title: 'Birthday',
+          start: getLocalTime(2026, 9, 30, 0),
+          duration: DAY_DURATION_MS,
+          isAllDay: true,
+        },
+        FOUR_HOURS_MS,
+      );
+
+      expect(days).toEqual(['2026-09-30']);
+    });
+
+    it('should list a multi-day all-day event on every day it covers', () => {
+      const days = getDaysWithEvent(
+        {
+          id: 'two-day-workshop',
+          calProviderId: 'provider-1',
+          issueProviderKey: 'ICAL',
+          title: 'Workshop',
+          start: getLocalTime(2026, 9, 30, 0),
+          duration: getLocalTime(2026, 10, 2, 0) - getLocalTime(2026, 9, 30, 0),
+          isAllDay: true,
+        },
+        0,
+      );
+
+      expect(days).toEqual(['2026-09-30', '2026-10-01']);
+    });
+
+    it('should list a timed event longer than a day on every day it covers', () => {
+      const days = getDaysWithEvent(
+        {
+          id: 'timed-two-day-workshop',
+          calProviderId: 'provider-1',
+          issueProviderKey: 'ICAL',
+          title: 'Workshop',
+          start: getLocalTime(2026, 9, 30, 10),
+          duration: getLocalTime(2026, 10, 1, 17) - getLocalTime(2026, 9, 30, 10),
+        },
+        0,
+      );
+
+      expect(days).toEqual(['2026-09-30', '2026-10-01']);
+    });
+
+    it('should still apply the start-of-next-day offset to a timed event', () => {
+      const days = getDaysWithEvent(
+        {
+          id: 'late-night-call',
+          calProviderId: 'provider-1',
+          issueProviderKey: 'ICAL',
+          title: 'Late night call',
+          start: getLocalTime(2026, 10, 1, 2),
+          duration: 30 * 60 * 1000,
+        },
+        FOUR_HOURS_MS,
+      );
+
+      expect(days).toEqual(['2026-09-30']);
+    });
+  });
 });
 
 describe('Planner Selectors - selectAllTasksDueToday', () => {
@@ -1040,5 +1138,95 @@ describe('Planner Selectors - selectAllTasksDueToday', () => {
         expect(ids).not.toContain('task400am');
       });
     });
+  });
+});
+
+describe('Planner Selectors - selectPlannerDays across several days with offset', () => {
+  const FOUR_HOURS_MS = 4 * 60 * 60 * 1000;
+  const FIFTY_NINE_MIN_MS = 59 * 60 * 1000;
+  const days = ['2026-03-10', '2026-03-11', '2026-03-12'];
+
+  const plannedTask = (id: string, dueWithTime: number): Task =>
+    ({
+      id,
+      title: id,
+      created: 0,
+      isDone: false,
+      subTaskIds: [],
+      tagIds: [],
+      projectId: 'p1',
+      timeSpentOnDay: {},
+      timeEstimate: 0,
+      timeSpent: 0,
+      attachments: [],
+      dueWithTime,
+    }) as Task;
+
+  const calEvent = (
+    id: string,
+    start: number,
+    isAllDay?: boolean,
+  ): ScheduleFromCalendarEvent =>
+    ({
+      id,
+      calProviderId: 'provider-1',
+      issueProviderKey: 'ICAL',
+      title: id,
+      start,
+      duration: isAllDay ? DAY_DURATION_MS : 30 * 60 * 1000,
+      ...(isAllDay ? { isAllDay: true } : {}),
+    }) as ScheduleFromCalendarEvent;
+
+  it('puts planned tasks and calendar events into their logical day', () => {
+    const tasks = [
+      // 03:59 is still the previous logical day with a 4h offset
+      plannedTask('A', getLocalTime(2026, 3, 11, 3) + FIFTY_NINE_MIN_MS),
+      plannedTask('B', getLocalTime(2026, 3, 11, 10)),
+      plannedTask('C', getLocalTime(2026, 3, 12, 4)),
+      plannedTask('D', getLocalTime(2026, 3, 11, 9)),
+    ];
+    const calendarEvents: ScheduleCalendarMapEntry[] = [
+      { items: [calEvent('E1', getLocalTime(2026, 3, 11, 2))] },
+      {
+        items: [
+          calEvent('E2', getLocalTime(2026, 3, 12, 11)),
+          calEvent('E3', getLocalTime(2026, 3, 11, 12), true),
+        ],
+      },
+    ];
+
+    const result = fromSelectors
+      .selectPlannerDays(
+        days,
+        [],
+        [],
+        calendarEvents,
+        tasks as Parameters<typeof fromSelectors.selectPlannerDays>[4],
+        '2026-03-09',
+      )
+      .projector(
+        new Map(tasks.map((t) => [t.id, t])),
+        { days: {}, addPlannedTasksDialogLastShown: undefined },
+        {
+          isWorkStartEndEnabled: false,
+          workStart: '09:00',
+          workEnd: '17:00',
+          isLunchBreakEnabled: false,
+          lunchBreakStart: '12:00',
+          lunchBreakEnd: '13:00',
+        },
+        FOUR_HOURS_MS,
+      );
+
+    expect(result.map((d) => d.scheduledIItems.map((si) => si.id))).toEqual([
+      ['E1', 'A'],
+      ['D', 'B'],
+      ['C', 'E2'],
+    ]);
+    expect(result.map((d) => d.allDayEvents.map((ev) => ev.id))).toEqual([
+      [],
+      ['E3'],
+      [],
+    ]);
   });
 });

@@ -1,5 +1,9 @@
 # Vector Clocks Architecture
 
+**Sections:** [1. Overview](#1-overview) · [2. Core Operations](#2-core-operations) · [3. Where Vector Clocks Live](#3-where-vector-clocks-live) · [4. Vector Clock Lifecycle (Normal Operations)](#4-vector-clock-lifecycle-normal-operations) · [5. Pruning](#5-pruning) · [6. Conflict Detection & Resolution (Server Upload)](#6-conflict-detection--resolution-server-upload) · [7. SYNC_IMPORT / BACKUP_IMPORT / REPAIR Handling](#7-sync_import--backup_import--repair-handling) · [8. Key Scenarios (Step-by-Step Traces)](#8-key-scenarios-step-by-step-traces) · [9. Invariants](#9-invariants) · [10. Key Files Reference](#10-key-files-reference) · [11. History & Rationale (why pruning is the way it is)](#11-history--rationale-why-pruning-is-the-way-it-is)
+
+Line numbers: `rg -n '^#{1,3} ' <this file>`, then read one section with `sed -n`.
+
 ## 1. Overview
 
 Vector clocks track **causality** — "did this client know about that operation?" — rather than wall-clock time, which can drift between devices. They are the foundation of conflict detection and SYNC_IMPORT filtering in Super Productivity's sync system.
@@ -186,6 +190,7 @@ When the server rejects an operation:
 2. `SupersededOperationResolverService.resolveSupersededLocalOps()`:
    - Merges the global clock + all superseded ops' clocks + snapshot clock + extra clocks from force download
      (the forced seq-0 download collects clocks from every re-fetched op, but does not _deliver_ ops that sit behind the persisted cursor AND are covered by the local clock — compaction may have pruned them from the local log, and re-applying a pruned `SYNC_IMPORT` would otherwise resurface it as a new incoming import; the cursor half keeps ops blocked on a newer schema version retryable, since this merge can cover them before they were ever applied)
+   - An interrupted forced download (e.g. mobile network cut on backgrounding) resumes from an in-memory checkpoint instead of seq 0. It only covers pages that delivered **no** new op, is keyed on client id + `configEpoch`, and is dropped on a gap reset or completion
    - Calls `mergeAndIncrementClocks()` — **no client-side pruning!**
    - Creates new LWW Update ops with the merged clock
 3. Re-uploads → server compares the full merged clock (which now has MAX+1 entries or more) → `GREATER_THAN` → accept

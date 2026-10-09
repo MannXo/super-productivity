@@ -47,6 +47,7 @@ import { createValidAppData } from '../../validation/state-validity-test-utils';
 import { DEFAULT_GLOBAL_CONFIG } from '../../../features/config/default-global-config.const';
 import { selectSyncConfig } from '../../../features/config/store/global-config.reducer';
 import { CLIENT_ID_PROVIDER } from '../../util/client-id.provider';
+import { UploadRevToMatchMismatchAPIError } from '../../core/errors/sync-errors';
 
 /**
  * #10119: file-based providers (Dropbox/WebDAV/local file) return the WHOLE
@@ -133,7 +134,10 @@ for (const isUseSplitSyncFiles of [false, true]) {
 
     /** Another device writes ops to the shared file (its own sync cycle). */
     const androidUploads = async (...ops: Operation[]): Promise<void> => {
-      await android.uploadOps(ops as SyncOperation[], OTHER);
+      const downloaded = await android.downloadOps(0, OTHER);
+      await android.setLastServerSeq(downloaded.latestSeq);
+      const uploaded = await android.uploadOps(ops as SyncOperation[], OTHER);
+      await android.setLastServerSeq(uploaded.latestSeq);
     };
 
     /**
@@ -414,27 +418,25 @@ for (const isUseSplitSyncFiles of [false, true]) {
       expect(appliedOpIdsPassedToApplier()).not.toContain('android-add-old');
     });
 
-    // The dangerous direction: the cursor can run AHEAD of what this device
-    // applied, because an upload merges into the freshly read remote file and
-    // its new syncVersion becomes the cursor. A remote op merged that way was
-    // never applied here and must still be delivered by the next download.
-    it('still delivers a remote op that an own upload merged past the cursor before it was downloaded', async () => {
+    it('retries an upload against unseen remote data before advancing the cursor', async () => {
       await seedRemoteFromLinux();
       await androidUploads(otherAddTask('android-unseen', 'unseen-task', { [OTHER]: 1 }));
 
-      // Linux uploads WITHOUT downloading first (e.g. the in-cycle cache
-      // expired while a dialog was open): the cursor jumps past android-unseen.
-      await linuxUploads(
-        taskOp(
-          'linux-edit',
-          ownClientId,
-          ActionType.TASK_SHARED_UPDATE,
-          OpType.Update,
-          'linux-seed-task',
-          { actionPayload: {}, entityChanges: [] },
-          { [ownClientId]: 2 },
-        ),
+      const localEdit = taskOp(
+        'linux-edit',
+        ownClientId,
+        ActionType.TASK_SHARED_UPDATE,
+        OpType.Update,
+        'linux-seed-task',
+        { actionPayload: {}, entityChanges: [] },
+        { [ownClientId]: 2 },
       );
+      await expectAsync(linuxUploads(localEdit)).toBeRejectedWithError(
+        UploadRevToMatchMismatchAPIError,
+      );
+      expect(await linux.getLastServerSeq()).toBe(1);
+      await syncService.downloadRemoteOps(linux);
+      await linuxUploads(localEdit);
       expect(await linux.getLastServerSeq()).toBe(3);
 
       await androidUploads(
@@ -446,11 +448,10 @@ for (const isUseSplitSyncFiles of [false, true]) {
       expect(appliedOpIdsPassedToApplier()).toContain('android-after');
     });
 
-    // Known gap (operation-log-architecture.md B.2): an author whose own
+    // #10239 (operation-log-architecture.md B.2): an author whose own
     // counter regressed (USE_REMOTE onto a stale USE_LOCAL snapshot) re-uses a
     // counter this device already covers. If an own upload also merged that op
     // past the cursor, cursor + clock both say "delivered".
-    // Pending until #10239 stops the cursor advancing past unseen versions.
     const DESKTOP = 'desktop-client';
 
     /** Android authors counters 1 and 2; Linux applies both (clock covers A:2). */
@@ -489,32 +490,39 @@ for (const isUseSplitSyncFiles of [false, true]) {
       );
     };
 
-    /** Linux uploads and then downloads; the new Android op must arrive. */
-    const expectLinuxStillGetsRegressedOpAfterUpload = async (): Promise<void> => {
-      await linuxUploads(
-        taskOp(
-          'linux-edit',
-          ownClientId,
-          ActionType.TASK_SHARED_UPDATE,
-          OpType.Update,
-          'linux-seed-task',
-          { actionPayload: {}, entityChanges: [] },
-          { [OTHER]: 2, [ownClientId]: 2 },
+    /** Reject the unseen baseline; the next download must still deliver its ops. */
+    const expectLinuxStillGetsRegressedOpAfterUpload = async (
+      localCounter = 2,
+    ): Promise<void> => {
+      const path = isUseSplitSyncFiles ? 'sync-ops.json' : 'sync-data.json';
+      const before = remote.getFileContent(path);
+      const cursor = await linux.getLastServerSeq();
+      await expectAsync(
+        linuxUploads(
+          taskOp(
+            'linux-edit',
+            ownClientId,
+            ActionType.TASK_SHARED_UPDATE,
+            OpType.Update,
+            'linux-seed-task',
+            { actionPayload: {}, entityChanges: [] },
+            { [OTHER]: 2, [ownClientId]: localCounter },
+          ),
         ),
-      );
-      // Another device writes again. Without it, Dropbox/OneDrive would skip
-      // the next download entirely (rev unchanged since Linux's own upload).
-      await androidUploads(
-        otherAddTask('android-later', 'task-later', { [OTHER]: 3, [DESKTOP]: 1 }),
-      );
-      applierSpy.applyOperations.calls.reset();
-      await syncService.downloadRemoteOps(linux);
+      ).toBeRejectedWithError(UploadRevToMatchMismatchAPIError);
+      expect(await linux.getLastServerSeq()).toBe(cursor);
+      expect(remote.getFileContent(path)).toEqual(before);
 
-      expect(appliedOpIdsPassedToApplier()).toContain('android-later');
-      expect(appliedOpIdsPassedToApplier()).toContain('android-after-reset');
+      // No later Android write is needed to get past the rev pre-check: the
+      // rejected upload must not mark the unseen rev as already downloaded.
+      const downloaded = await TestBed.inject(
+        OperationLogDownloadService,
+      ).downloadRemoteOps(linux);
+      expect(downloaded.success).toBeTrue();
+      expect(downloaded.newOps.map((op) => op.id)).toContain('android-after-reset');
     };
 
-    xit('known gap: delivers a new op from an author whose counter regressed via USE_LOCAL/USE_REMOTE', async () => {
+    it('keeps a same-version replacement pending after USE_LOCAL/USE_REMOTE', async () => {
       await linuxAppliesAndroidCounters1And2();
       await regressAndroidCounterViaUseLocalUseRemote();
 
@@ -533,7 +541,7 @@ for (const isUseSplitSyncFiles of [false, true]) {
     // Dropbox/OneDrive an unchanged rev short-circuits the download without
     // filling the in-cycle cache, so the upload right after re-reads the file
     // and merges whatever landed in between.
-    xit('known gap: same, within one Dropbox sync cycle via the rev pre-check', async () => {
+    it('keeps the unseen rev pending within one Dropbox sync cycle', async () => {
       remote = new MockFileProvider(SyncProviderId.Dropbox);
       linux = newAdapter();
       android = newAdapter();
@@ -551,5 +559,96 @@ for (const isUseSplitSyncFiles of [false, true]) {
       await regressAndroidCounterViaUseLocalUseRemote();
       await expectLinuxStillGetsRegressedOpAfterUpload();
     });
+
+    it('rejects a second upload against unseen data after the first cleared its cache', async () => {
+      await linuxAppliesAndroidCounters1And2();
+      await linuxUploads(
+        taskOp(
+          'linux-first-edit',
+          ownClientId,
+          ActionType.TASK_SHARED_UPDATE,
+          OpType.Update,
+          'linux-seed-task',
+          { actionPayload: {}, entityChanges: [] },
+          { [OTHER]: 2, [ownClientId]: 2 },
+        ),
+      );
+      await regressAndroidCounterViaUseLocalUseRemote();
+      await expectLinuxStillGetsRegressedOpAfterUpload(3);
+    });
+
+    // A fresh device found an empty folder. Another device then seeds it with a
+    // full-state snapshot (SYNC_IMPORT) before the fresh device uploads. The
+    // snapshot carries no retained ops and the fresh device has no recorded
+    // clock for the #9170 base check, so its upload must still wait for a
+    // download: merging would replace the other device's state. v2 only; the
+    // split format's counterpart is tracked with its rollout (#10395).
+    if (!isUseSplitSyncFiles) {
+      const seedSnapshotFromOtherDevice = async (): Promise<void> => {
+        const seeder = 'seeding-client';
+        await newAdapter().uploadSnapshot(
+          createValidAppData(),
+          seeder,
+          'initial',
+          { [seeder]: 1 },
+          CURRENT_SCHEMA_VERSION,
+          false,
+          'seed-import',
+          false,
+          'SYNC_IMPORT',
+          'SERVER_MIGRATION',
+        );
+      };
+      /** Deferred, writes nothing, keeps the cursor; goes through once applied. */
+      const expectFirstUploadDeferredUntilApplied = async (): Promise<void> => {
+        const linuxFirst = taskOp(
+          'linux-first',
+          ownClientId,
+          ActionType.TASK_SHARED_ADD,
+          OpType.Create,
+          'linux-task',
+          { actionPayload: {}, entityChanges: [] },
+          { [ownClientId]: 1 },
+        );
+        const before = remote.getFileContent('sync-data.json');
+        await expectAsync(linuxUploads(linuxFirst)).toBeRejectedWithError(
+          UploadRevToMatchMismatchAPIError,
+        );
+        expect(remote.getFileContent('sync-data.json')).toEqual(before);
+        expect(await linux.getLastServerSeq()).toBe(0);
+
+        const next = await linux.downloadOps(0, ownClientId);
+        expect(next.snapshotState).toBeDefined();
+        await linux.setLastServerSeq(next.latestSeq);
+        await linuxUploads(linuxFirst);
+        expect(remote.getFileContent('sync-data.json')).not.toEqual(before);
+      };
+
+      for (const readBeforeUpload of ['none', 'unapplied probe'] as const) {
+        it(`retries an upload onto a snapshot seeded after an empty download (${readBeforeUpload})`, async () => {
+          const empty = await linux.downloadOps(0, ownClientId);
+          expect(empty.latestSeq).toBe(0);
+          await linux.setLastServerSeq(empty.latestSeq);
+          await seedSnapshotFromOtherDevice();
+          if (readBeforeUpload === 'unapplied probe') {
+            // The server-migration check reads the folder without applying it.
+            expect((await linux.downloadOps(0, undefined, 1)).latestSeq).toBe(1);
+          }
+          await expectFirstUploadDeferredUntilApplied();
+        });
+      }
+
+      it('retries an upload onto a seed read by server-migration checks after the cache expired', async () => {
+        const empty = await linux.downloadOps(0, ownClientId);
+        expect(empty.latestSeq).toBe(0);
+        await seedSnapshotFromOtherDevice();
+        expect((await linux.downloadOps(0, undefined, 1)).latestSeq).toBe(1);
+        await linux.setLastServerSeq(empty.latestSeq);
+        expect((await linux.downloadOps(0, undefined, 1)).latestSeq).toBe(1);
+        const realNow = Date.now();
+        spyOn(Date, 'now').and.returnValue(realNow + 60_000);
+        await expectFirstUploadDeferredUntilApplied();
+      });
+    }
   });
 }

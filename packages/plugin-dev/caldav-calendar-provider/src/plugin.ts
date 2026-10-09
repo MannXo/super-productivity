@@ -575,8 +575,15 @@ const parseCalendarList = (xml: string): CalendarInfo[] => {
       CALDAV_NS,
       'supported-calendar-component-set',
     )[0];
+    // PROPFIND also includes a requested but absent property as an empty
+    // element inside a 404 propstat. That is absence, not an empty component set.
+    const propstat = compSet?.parentNode?.parentNode as Element | undefined;
+    const compSetStatus = propstat?.getElementsByTagNameNS(DAV_NS, 'status')[0]
+      ?.textContent;
+    const isAbsentCompSet = /\s404(?:\s|$)/.test(compSetStatus ?? '');
     const supportsVevent =
       !compSet ||
+      isAbsentCompSet ||
       Array.from(compSet.getElementsByTagNameNS(CALDAV_NS, 'comp')).some(
         (comp) => comp.getAttribute('name')?.toUpperCase() === 'VEVENT',
       );
@@ -909,8 +916,21 @@ const veventToOccurrence = (
 };
 
 /**
+ * Overlap test matching CalDAV time-range semantics: an occurrence that began
+ * before the window but is still running stays visible. A zero-length event
+ * counts when it starts inside the window.
+ */
+const overlapsRange = (
+  startMs: number,
+  durationMs: number,
+  range: { startMs: number; endMs: number },
+): boolean =>
+  startMs < range.endMs &&
+  (startMs >= range.startMs || startMs + durationMs > range.startMs);
+
+/**
  * Parse iCal data with ical.js and emit one PluginSearchResult per occurrence
- * within [rangeStartMs, rangeEndMs). Handles RRULE, EXDATE, and RECURRENCE-ID
+ * overlapping [rangeStartMs, rangeEndMs). Handles RRULE, EXDATE, and RECURRENCE-ID
  * exception instances (overrides + cancellations).
  */
 const expandIcalToSearchResults = (
@@ -961,6 +981,7 @@ const expandIcalToSearchResults = (
 
   const exceptionMap = buildExceptionMap(vevents);
   const out: PluginSearchResult[] = [];
+  const range = { startMs: rangeStartMs, endMs: rangeEndMs };
 
   for (const ve of vevents) {
     // Per-event guard: a single malformed VEVENT must not drop the rest of
@@ -978,7 +999,7 @@ const expandIcalToSearchResults = (
 
       const rrule = ve.getFirstPropertyValue('rrule');
       if (!rrule) {
-        if (startMs >= rangeStartMs && startMs < rangeEndMs) {
+        if (overlapsRange(startMs, durationMs, range)) {
           out.push(
             veventToOccurrence(
               ve,
@@ -1026,7 +1047,7 @@ const expandIcalToSearchResults = (
         const ms = next.toJSDate().getTime();
         if (isNaN(ms)) continue;
         if (ms >= rangeEndMs) break;
-        if (ms < rangeStartMs) continue;
+        if (!overlapsRange(ms, durationMs, range)) continue;
         if (exceptionTimes.has(ms)) continue;
         out.push(
           veventToOccurrence(ve, ms, durationMs, isAllDay, calendarHref, eventHref, ms),
@@ -1038,12 +1059,13 @@ const expandIcalToSearchResults = (
         if (ex.isCancelled) continue;
         const exStartMs = icalTimeToMs(ex.vevent.getFirstPropertyValue('dtstart'));
         if (exStartMs === null) continue;
-        if (exStartMs < rangeStartMs || exStartMs >= rangeEndMs) continue;
+        const exDurationMs = calcDurationMs(ex.vevent, exStartMs);
+        if (!overlapsRange(exStartMs, exDurationMs, range)) continue;
         out.push(
           veventToOccurrence(
             ex.vevent,
             exStartMs,
-            calcDurationMs(ex.vevent, exStartMs),
+            exDurationMs,
             isAllDayIcal(ex.vevent),
             calendarHref,
             eventHref,
@@ -1067,6 +1089,9 @@ const expandIcalToSearchResults = (
   return out;
 };
 
+/** Minimum lookback for the read window, like the iCal provider's START_OFFSET. */
+const LOOKBACK_MS = 2 * 60 * 60 * 1000;
+
 /** Fetch events from a single calendar via REPORT */
 const fetchEventsForCalendar = async (
   http: PluginHttp,
@@ -1075,15 +1100,18 @@ const fetchEventsForCalendar = async (
 ): Promise<PluginSearchResult[]> => {
   const syncRangeWeeks = Math.max(parseInt(cfg.syncRangeWeeks || '', 10) || 2, 1);
   const now = new Date();
-  // Anchor the window to start-of-today (UTC) so events already in progress
-  // earlier on the same day stay visible. Using `now` as the lower bound would
-  // hide an ongoing meeting. UTC anchor keeps the math timezone-independent.
-  const rangeStartMs = Date.UTC(
-    now.getUTCFullYear(),
-    now.getUTCMonth(),
-    now.getUTCDate(),
-  );
-  const rangeEndMs = rangeStartMs + syncRangeWeeks * 7 * 24 * 60 * 60 * 1000;
+  // Start the window at the user's LOCAL start of day, so events that started
+  // earlier today (including one still in progress) stay visible, or
+  // LOOKBACK_MS ago if that is earlier, so a late-evening event is still shown
+  // just after midnight. A UTC-midnight anchor dropped them mid-day for anyone
+  // outside UTC (e.g. at 17:00 in Los Angeles).
+  const localStartOfDayMs = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+  ).getTime();
+  const rangeStartMs = Math.min(localStartOfDayMs, now.getTime() - LOOKBACK_MS);
+  const rangeEndMs = now.getTime() + syncRangeWeeks * 7 * 24 * 60 * 60 * 1000;
   const start = toIcalUtcDateTime(new Date(rangeStartMs));
   const end = toIcalUtcDateTime(new Date(rangeEndMs));
 
